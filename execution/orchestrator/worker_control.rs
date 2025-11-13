@@ -610,11 +610,6 @@ impl Orchestrator {
         }
 
         // shutdown plug services
-        crate::cli_output::print_section(
-            crate::cli_output::Section::System,
-            "Shutting down plug services during orchestrator teardown",
-        );
-
         let plug_service_manager = {
             let resource_manager = self.resource_manager.read().await;
             Arc::clone(resource_manager.get_plug_service_manager())

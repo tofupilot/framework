@@ -27,7 +27,7 @@ fn emit_plug_status(
             status,
         };
 
-        println!("🔌 [BACKEND] Emitting plug-status-update: {:?}", event);
+        println!("PLUG [BACKEND] Emitting plug-status-update: {:?}", event);
         let _ = app.emit("plug-status-update", event);
     }
 }

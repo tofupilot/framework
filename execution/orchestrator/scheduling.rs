@@ -16,11 +16,6 @@ impl Orchestrator {
         &mut self,
         app_handle: Option<AppHandle>,
     ) -> Result<ExecutionStats, String> {
-        cli_output::print_section(
-            cli_output::Section::Init,
-            "Starting orchestrator execution loop",
-        );
-
         // Set start time
         self.start_time = Some(chrono::Utc::now());
 
@@ -124,14 +119,7 @@ impl Orchestrator {
             }
         }
 
-        cli_output::error("Execution loop completed, starting plug auto-teardown".to_string());
-
         // Auto-teardown: Destroy all remaining plugs at procedure end
-        crate::cli_output::print_section(
-            crate::cli_output::Section::Plugs,
-            "Auto-destroying remaining plugs at procedure end",
-        );
-
         let resource_manager = self.resource_manager.write().await;
 
         // Destroy all slot-level plugs

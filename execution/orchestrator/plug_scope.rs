@@ -146,13 +146,13 @@ impl Orchestrator {
                     plug_configs.insert(plug_key.clone(), plug_def.to_config_json());
                 } else {
                     crate::cli_output::warning(format!(
-                        "⚠️ Warning: Plug '{}' required by job '{}' not found in procedure definition",
+                        "WARNING: Warning: Plug '{}' required by job '{}' not found in procedure definition",
                         plug_key, job.phase_name
                     ));
                 }
             }
         } else {
-            crate::cli_output::warning("⚠️ Warning: No procedure definition available for plug configuration lookup");
+            crate::cli_output::warning("WARNING: Warning: No procedure definition available for plug configuration lookup");
         }
 
         plug_configs

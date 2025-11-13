@@ -556,7 +556,7 @@ impl Worker {
                             });
 
                             crate::execution::cli_output::debug(format!(
-                                "  ✓ Added bound measurement: {}",
+                                "  OK: Added bound measurement: {}",
                                 name
                             ));
                         }
@@ -622,7 +622,7 @@ impl Worker {
                                     crate::execution::cli_output::print_section(
                                         crate::execution::cli_output::Section::Error,
                                         format!(
-                                            "⚠️ Failed to attach file {}: {}",
+                                            "WARNING: Failed to attach file {}: {}",
                                             attachment_name, e
                                         ),
                                     );
@@ -644,7 +644,7 @@ impl Worker {
                                     crate::execution::cli_output::print_section(
                                         crate::execution::cli_output::Section::Error,
                                         format!(
-                                            "⚠️ Failed to attach file {} to slot {}: {}",
+                                            "WARNING: Failed to attach file {} to slot {}: {}",
                                             attachment_name, slot_id, e
                                         ),
                                     );
@@ -678,7 +678,7 @@ impl Worker {
                                             crate::execution::cli_output::print_section(
                                                 crate::execution::cli_output::Section::Error,
                                                 format!(
-                                                    "⚠️ Failed to attach data {}: {}",
+                                                    "WARNING: Failed to attach data {}: {}",
                                                     attachment_name, e
                                                 ),
                                             );
@@ -693,7 +693,7 @@ impl Worker {
                                         crate::execution::cli_output::print_section(
                                             crate::execution::cli_output::Section::Error,
                                             format!(
-                                                "⚠️ Failed to decode base64 for {}: {}",
+                                                "WARNING: Failed to decode base64 for {}: {}",
                                                 attachment_name, e
                                             ),
                                         );
@@ -711,7 +711,7 @@ impl Worker {
                                             crate::execution::cli_output::print_section(
                                                 crate::execution::cli_output::Section::Error,
                                                 format!(
-                                                    "⚠️ Failed to attach data {} to slot {}: {}",
+                                                    "WARNING: Failed to attach data {} to slot {}: {}",
                                                     attachment_name, slot_id, e
                                                 ),
                                             );
@@ -727,7 +727,7 @@ impl Worker {
                                     crate::execution::cli_output::print_section(
                                         crate::execution::cli_output::Section::Error,
                                         format!(
-                                            "⚠️ Failed to decode base64 for {}: {}",
+                                            "WARNING: Failed to decode base64 for {}: {}",
                                             attachment_name, e
                                         ),
                                     );
@@ -1134,7 +1134,7 @@ impl Worker {
                 });
 
                 crate::execution::cli_output::debug(format!(
-                    "  ✓ Added bound measurement: {}",
+                    "  OK: Added bound measurement: {}",
                     name
                 ));
             }
@@ -1308,7 +1308,7 @@ impl Worker {
                 logs.push(LogEntry {
                     timestamp: chrono::Utc::now().to_rfc3339(),
                     level: "WARN".to_string(),
-                    message: format!("⚠️ {}", line),
+                    message: format!("WARNING: {}", line),
                     file: None,
                     line: None,
                 });

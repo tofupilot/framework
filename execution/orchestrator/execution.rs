@@ -26,17 +26,6 @@ impl Orchestrator {
         app_handle: Option<AppHandle>,
         _permit: tokio::sync::OwnedSemaphorePermit,
     ) -> Result<(), String> {
-        crate::cli_output::print_section(
-            crate::cli_output::Section::Worker,
-            format!(
-                "Assigning job {} ({}) to worker {} (plugs: {:?})",
-                job.phase_name,
-                job.slot_id.as_deref().unwrap_or("<shared>"),
-                worker_id,
-                job.required_plugs
-            ),
-        );
-
         // Track phase in display systems
         {
             let state = self.state.read().await;
@@ -149,21 +138,18 @@ impl Orchestrator {
                 }
             }
 
-            // Always show phase start
+            // Debug-only phase start logging
             {
                 let timeout_msg = match original_job.timeout_ms {
                     Some(ms) => format!("timeout: {}ms", ms),
                     None => "no timeout".to_string(),
                 };
-                crate::cli_output::print_section(
-                    crate::cli_output::Section::Phase,
-                    format!(
-                        "Starting phase '{}' for {} ({})",
-                        original_job.phase_name,
-                        original_job.slot_id.as_deref().unwrap_or("<shared>"),
-                        timeout_msg
-                    ),
-                );
+                crate::cli_output::debug(format!(
+                    "Starting phase '{}' for {} ({})",
+                    original_job.phase_name,
+                    original_job.slot_id.as_deref().unwrap_or("<shared>"),
+                    timeout_msg
+                ));
             }
 
             // Spawn a warning task only if timeout is set

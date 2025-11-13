@@ -319,8 +319,8 @@ pub enum RunResult {
 
 // CLI functionality with new orchestrator
 pub fn run_cli_mode(procedure_dir: PathBuf, procedure_file: Option<String>) {
-    // Initialize CLI output system (default to Normal level)
-    execution::cli_output::init(execution::cli_output::OutputLevel::Normal);
+    // Initialize CLI output system
+    execution::cli_output::init();
 
     let runtime = match tokio::runtime::Runtime::new() {
         Ok(rt) => rt,
@@ -330,8 +330,6 @@ pub fn run_cli_mode(procedure_dir: PathBuf, procedure_file: Option<String>) {
         }
     };
     runtime.block_on(async {
-        execution::cli_output::print_section(execution::cli_output::Section::Init, "Starting CLI mode");
-
         // Load procedure definition
         let procedure_def = if let Some(ref file) = procedure_file {
             let full_path = procedure_dir.join(file);
@@ -388,39 +386,16 @@ pub fn run_cli_mode(procedure_dir: PathBuf, procedure_file: Option<String>) {
                 )
                 .await
             {
-                execution::cli_output::verbose(format!("⚠️ Failed to initialize report manager: {}", e));
+                execution::cli_output::verbose(format!("WARNING: Failed to initialize report manager: {}", e));
                 // Continue execution even if report manager fails
             }
         }
 
-        // Log the execution strategy from procedure
-        match procedure_def.strategy {
-            ExecutionStrategy::SlotFirst => {
-                execution::cli_output::print_section(execution::cli_output::Section::Config, "📄 Using YAML execution strategy: slot_first");
-            }
-            ExecutionStrategy::PhaseFirst => {
-                execution::cli_output::print_section(execution::cli_output::Section::Config, "📄 Using YAML execution strategy: phase_first");
-            }
-        }
-
-        // Show clear feedback about worker configuration
-        let detected_cpus = num_cpus::get();
-        if procedure_def.worker_count.is_none() {
-            execution::cli_output::print_section(execution::cli_output::Section::Config, format!(
-                "⚙️  Workers: {} (auto-detected from {} CPU cores)",
-                effective_worker_count, detected_cpus
-            ));
-        } else {
-            execution::cli_output::print_section(execution::cli_output::Section::Config, format!(
-                "⚙️  Workers: {} (YAML config, {} CPU cores available)",
-                effective_worker_count, detected_cpus
-            ));
-        }
-
+        // Show configuration
         execution::cli_output::print_section(execution::cli_output::Section::Config, format!(
-            "📋 Submitting procedure for {} slots with {} workers",
-            slots.len(),
-            effective_worker_count
+            "Workers: {} | Slots: {}",
+            effective_worker_count,
+            slots.len()
         ));
 
         // Submit procedure with execution model (CLI mode has no initial unit input)
@@ -442,50 +417,30 @@ pub fn run_cli_mode(procedure_dir: PathBuf, procedure_file: Option<String>) {
         }
 
         // Execute all jobs
-        match orchestrator.execute_all(None).await {
+        let exit_code = match orchestrator.execute_all(None).await {
             Ok(stats) => {
-                execution::cli_output::print_section(execution::cli_output::Section::Summary, " Execution completed successfully");
-                execution::cli_output::print_section(execution::cli_output::Section::Summary, format!(
-                    "📊 Results: {} completed, {} failed",
-                    stats.completed_jobs, stats.failed_jobs
-                ));
+                println!();
 
-                // Print job results
-                let state = orchestrator.state.read().await;
-                for (job_id, result) in state.job_results.iter() {
-                    let (status, error_msg) = if let Some(ref e) = result.error {
-                        (" ERROR", Some(e.clone()))
-                    } else if let Some(secs) = result.timeout_secs {
-                        ("TIMEOUT TIMEOUT", Some(format!("After {} seconds", secs)))
-                    } else {
-                        use execution::job::PhaseResult;
-                        match &result.phase_result {
-                            PhaseResult::Stop => ("STOP STOP", None),
-                            PhaseResult::Fail => ("⚠️ FAIL", None),
-                            PhaseResult::Skip => ("SKIP SKIP", None),
-                            _ => (" PASS", None),
-                        }
-                    };
+                let passed = stats.completed_jobs - stats.failed_jobs;
+                let status = if stats.failed_jobs == 0 { "PASSED" } else { "FAILED" };
 
-                    execution::cli_output::print_item(
-                        format!("{} Job {}: {} measurements",
-                        status,
-                        &job_id.to_string()[..8],
-                        result.measurements.len()), 1
-                    );
+                execution::cli_output::print_section(
+                    execution::cli_output::Section::Summary,
+                    format!("Result: {} ({} passed, {} failed)", status, passed, stats.failed_jobs)
+                );
 
-                    if let Some(error) = error_msg {
-                        execution::cli_output::print_item(format!("ERROR: {}", error), 2);
-                    }
-                }
+                if stats.failed_jobs == 0 { 0 } else { 1 }
             }
             Err(e) => {
-                execution::cli_output::print_section(execution::cli_output::Section::Error, format!(" Execution failed: {}", e));
+                execution::cli_output::print_section(execution::cli_output::Section::Error, format!("Execution failed: {}", e));
+                1
             }
-        }
+        };
 
         // Shutdown workers
         let _ = orchestrator.shutdown(None).await;
+
+        std::process::exit(exit_code);
     });
 }
 
@@ -704,7 +659,7 @@ async fn execute_parallel_runs(
         )
         .await
     {
-        execution::cli_output::verbose(format!("⚠️ Failed to initialize report manager: {}", e));
+        execution::cli_output::verbose(format!("WARNING: Failed to initialize report manager: {}", e));
         // Continue execution even if report manager fails
     }
 
@@ -805,7 +760,7 @@ async fn execute_parallel_runs(
 
             // Check if execution task is complete
             if execution_handle.is_finished() {
-                execution::cli_output::error(format!("Execution task finished for '{}'", key_clone));
+                execution::cli_output::debug(format!("Execution task finished for '{}'", key_clone));
                 // Shutdown workers BEFORE emitting cleanup-complete so frontend listeners receive the events
                 {
                     execution::cli_output::debug(format!("Calling orchestrator.shutdown() for '{}'", key_clone));
@@ -933,7 +888,7 @@ async fn execute_parallel_runs(
                     let mut resource_manager_refs = resource_manager_refs_map_clone.lock().await;
                     resource_manager_refs.remove(&key_clone);
                 }
-                execution::cli_output::error(format!("Orchestrator '{}' teardown complete", key_clone));
+                execution::cli_output::debug(format!("Orchestrator '{}' teardown complete", key_clone));
 
                 let _ = app_handle_clone.emit(
                     "orchestrator-teardown-complete",
@@ -1185,12 +1140,18 @@ async fn get_test_runs(procedure_dir: String) -> Result<String, String> {
 
         let content = match fs::read_to_string(&run_file) {
             Ok(c) => c,
-            Err(_) => continue,
+            Err(e) => {
+                eprintln!("[get_test_runs] Failed to read {:?}: {}", run_file, e);
+                continue;
+            }
         };
 
         let report: Run = match serde_json::from_str(&content) {
             Ok(r) => r,
-            Err(_) => continue,
+            Err(e) => {
+                eprintln!("[get_test_runs] Failed to parse {:?}: {}", run_file, e);
+                continue;
+            }
         };
 
         let directory = path.file_name()
@@ -1217,6 +1178,8 @@ async fn get_test_runs(procedure_dir: String) -> Result<String, String> {
     }
 
     summaries.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+
+    eprintln!("[get_test_runs] Returning {} runs from {}", summaries.len(), procedure_dir);
 
     let result = serde_json::json!({ "runs": summaries });
     serde_json::to_string(&result).map_err(|e| format!("Failed to serialize: {}", e))
@@ -1290,6 +1253,8 @@ async fn mark_run_upload_failed(procedure_dir: String, run_id: String, error: St
     use std::path::Path;
     use crate::execution::runs::{Run, DashboardInfo};
 
+    eprintln!("[mark_run_upload_failed] Looking for run_id: {} in {}", run_id, procedure_dir);
+
     let reports_dir = Path::new(&procedure_dir).join("reports");
 
     let entries = fs::read_dir(&reports_dir)
@@ -1314,7 +1279,10 @@ async fn mark_run_upload_failed(procedure_dir: String, run_id: String, error: St
         let mut report: Run = serde_json::from_str(&content)
             .map_err(|e| format!("Failed to parse report: {}", e))?;
 
+        eprintln!("[mark_run_upload_failed] Checking report with run_id: {}", report.run_id);
+
         if report.run_id == run_id {
+            eprintln!("[mark_run_upload_failed] FOUND! Setting error and writing to {:?}", run_file);
             report.dashboard = Some(DashboardInfo {
                 run_id: report.dashboard.as_ref().and_then(|d| d.run_id.clone()),
                 upload_error: Some(error),
@@ -1326,10 +1294,12 @@ async fn mark_run_upload_failed(procedure_dir: String, run_id: String, error: St
             fs::write(&run_file, updated_json)
                 .map_err(|e| format!("Failed to write report: {}", e))?;
 
+            eprintln!("[mark_run_upload_failed] Successfully wrote updated report");
             return Ok(());
         }
     }
 
+    eprintln!("[mark_run_upload_failed] ERROR: Report not found for run_id: {}", run_id);
     Err(format!("Report not found: {}", run_id))
 }
 
@@ -2450,7 +2420,7 @@ pub fn run() {
                 }
             });
 
-            #[cfg(any(target_os = "linux", all(debug_assertions, windows)))]
+            #[cfg(any(target_os = "linux", target_os = "windows"))]
             app.deep_link().register_all()?;
 
             Ok(())

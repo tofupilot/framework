@@ -192,6 +192,31 @@ impl Orchestrator {
         }
 
         // Emit job completion progress using unified helper
+        // Calculate duration in milliseconds
+        let duration_ms = (job_result.completed_at - job_result.started_at)
+            .num_milliseconds()
+            .max(0) as u64;
+
+        // Print clean phase completion with timing (works in both GUI and CLI modes)
+        let duration_secs = duration_ms as f64 / 1000.0;
+        let success = phase_outcome == Outcome::Pass;
+
+        // Format phase name with slot if available
+        let phase_label = if let Some(ref slot_id) = event.original_job.slot_id {
+            format!("{} [{}]", event.original_job.phase_name, slot_id)
+        } else {
+            event.original_job.phase_name.clone()
+        };
+
+        crate::cli_output::print_status(&phase_label, &format!("({:.1}s)", duration_secs), success);
+
+        // Print error details if failed
+        if !success {
+            if let Some(ref error_msg) = error_message {
+                crate::cli_output::print_item(error_msg, 1);
+            }
+        }
+
         if let Some(ref app) = app_handle {
             self.emit_job_progress(
                 app,
@@ -232,11 +257,6 @@ impl Orchestrator {
                 "Emitting job-complete for {}: outcome={:?}, is_retry_limit_exceeded={}",
                 event.original_job.phase_name, phase_outcome, is_retry_limit_exceeded
             ));
-
-            // Calculate duration in milliseconds
-            let duration_ms = (job_result.completed_at - job_result.started_at)
-                .num_milliseconds()
-                .max(0) as u64;
 
             let job_complete_event = super::JobCompleteEvent {
                 job_id: event.job_id.to_string(),
@@ -420,11 +440,6 @@ impl Orchestrator {
                 Outcome::Error => PhaseNextAction::Stop,
             }
         };
-
-        crate::cli_output::warning(format!(
-            "Phase '{}': is_terminal={}, Computed next_action={:?}",
-            event.original_job.phase_name, is_terminal, next_action
-        ));
 
         // Store the computed next_action in the job result for later use
         let mut job_result = job_result;

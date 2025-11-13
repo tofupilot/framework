@@ -1,63 +1,12 @@
 //! CLI output management module
-//! Provides structured, clean output for CLI mode with different verbosity levels
+//! Provides structured, clean output for CLI mode
 
 use std::io::{self, IsTerminal};
-use std::sync::OnceLock;
+use colored::Colorize;
 
-/// Global output level for CLI
-static OUTPUT_LEVEL: OnceLock<OutputLevel> = OnceLock::new();
-
-/// Output verbosity levels
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum OutputLevel {
-    /// Minimal output - only errors and final summary
-    Quiet = 0,
-    /// Default - clean structured output
-    Normal = 1,
-    /// Include worker assignments and job details
-    Verbose = 2,
-    /// Everything including IPC and protocol messages
-    Debug = 3,
-}
-
-impl OutputLevel {
-    /// Parse from CLI argument
-    pub fn from_cli_arg(quiet: bool, verbose: u8) -> Self {
-        if quiet {
-            OutputLevel::Quiet
-        } else {
-            match verbose {
-                0 => OutputLevel::Normal,
-                1 => OutputLevel::Verbose,
-                _ => OutputLevel::Debug,
-            }
-        }
-    }
-
-    /// Check environment variable for log level
-    pub fn from_env() -> Option<Self> {
-        std::env::var("STUDIO_LOG_LEVEL").ok().and_then(|level| {
-            match level.to_lowercase().as_str() {
-                "quiet" => Some(OutputLevel::Quiet),
-                "normal" => Some(OutputLevel::Normal),
-                "verbose" => Some(OutputLevel::Verbose),
-                "debug" => Some(OutputLevel::Debug),
-                _ => None,
-            }
-        })
-    }
-}
-
-/// Initialize the output system with the given level
-pub fn init(level: OutputLevel) {
-    OUTPUT_LEVEL.set(level).unwrap_or_else(|_| {
-        eprintln!("Warning: Output level already initialized");
-    });
-}
-
-/// Get the current output level
-pub fn level() -> OutputLevel {
-    *OUTPUT_LEVEL.get().unwrap_or(&OutputLevel::Normal)
+/// Initialize the output system
+pub fn init() {
+    // No-op, keeping for API compatibility
 }
 
 /// Check if running in a terminal (for progress bars)
@@ -93,79 +42,61 @@ impl Section {
             Section::System => "[SYSTEM]",
         }
     }
-
-    fn min_level(&self) -> OutputLevel {
-        match self {
-            Section::Error => OutputLevel::Quiet,   // Always show errors
-            Section::Summary => OutputLevel::Quiet, // Always show summary
-            _ => OutputLevel::Normal,               // Everything else needs Normal+
-        }
-    }
 }
 
 /// Print a message with a section header
 pub fn print_section(section: Section, message: impl AsRef<str>) {
-    if level() >= section.min_level() {
-        println!("[{}] {}", section.as_str(), message.as_ref());
+    match section {
+        Section::Error => eprintln!("{}", format!("ERROR: {}", message.as_ref()).red()),
+        Section::Summary => println!("{}", message.as_ref()),
+        _ => println!("[{}] {}", section.as_str(), message.as_ref()),
     }
 }
 
-/// Print a message at a specific output level
-pub fn print_at_level(min_level: OutputLevel, message: impl AsRef<str>) {
-    if level() >= min_level {
-        println!("{}", message.as_ref());
-    }
+/// Print a message
+pub fn print_at_level(message: impl AsRef<str>) {
+    println!("{}", message.as_ref());
 }
 
-/// Print an indented sub-item (for structured output)
+/// Print an indented sub-item
 pub fn print_item(message: impl AsRef<str>, indent: usize) {
-    if level() >= OutputLevel::Normal {
-        let indent_str = "  ".repeat(indent);
-        println!("{}• {}", indent_str, message.as_ref());
-    }
+    let indent_str = "  ".repeat(indent);
+    println!("{}• {}", indent_str, message.as_ref());
 }
 
-/// Print a status line with alignment
+/// Print a status line with alignment and color
 pub fn print_status(label: impl AsRef<str>, status: impl AsRef<str>, success: bool) {
-    if level() >= OutputLevel::Normal {
-        let dots = ".".repeat(50_usize.saturating_sub(label.as_ref().len()));
-        let symbol = if success { "✓" } else { "✗" };
-        println!(
-            "  {} {} {} {}",
-            label.as_ref(),
-            dots,
-            symbol,
-            status.as_ref()
-        );
-    }
+    let dots = ".".repeat(50_usize.saturating_sub(label.as_ref().len()));
+    let symbol = if success { "PASS".green() } else { "FAIL".red() };
+    println!(
+        "  {} {} {} {}",
+        label.as_ref(),
+        dots,
+        symbol,
+        status.as_ref()
+    );
 }
 
-/// Print debug information (only in Debug mode)
+/// Print debug information
 pub fn debug(message: impl AsRef<str>) {
-    if level() >= OutputLevel::Debug {
-        eprintln!("    · {}", message.as_ref());
-    }
+    eprintln!("    · {}", message.as_ref());
 }
 
-/// Print verbose information (only in Verbose mode or higher)
+/// Print verbose information
 pub fn verbose(message: impl AsRef<str>) {
-    if level() >= OutputLevel::Verbose {
-        println!("  → {}", message.as_ref());
-    }
+    println!("  → {}", message.as_ref());
 }
 
-/// Print an error message (always shown)
+/// Print an error message
 pub fn error(message: impl AsRef<str>) {
-    eprintln!("  ✗ {}", message.as_ref());
+    eprintln!("  {}", format!("ERROR: {}", message.as_ref()).red());
 }
 
-/// Print a header for the application
+/// Print application header
 pub fn print_header(name: &str, version: &str) {
-    if level() >= OutputLevel::Normal {
-        println!("{} v{}", name, version);
-        println!("{}", "=".repeat(name.len() + version.len() + 2));
-        println!();
-    }
+    println!("{} v{}", name, version);
+    println!("{}", "═".repeat(name.len() + version.len() + 2));
+    println!();
 }
 
 /// Print execution summary
@@ -176,21 +107,19 @@ pub fn print_summary(
     failed: usize,
     duration_secs: u64,
 ) {
-    if level() >= OutputLevel::Quiet {
-        println!();
-        println!("═══════════════════════════════════════════════════════════");
-        let status_text = if passed { "PASSED" } else { "FAILED" };
-        println!("  Status: {}", status_text);
-        println!("  Jobs: {}", total_jobs);
-        println!("  Completed: {}", completed);
-        println!("  Failed: {}", failed);
+    println!();
+    println!("═══════════════════════════════════════════════════════════");
+    let status_text = if passed { "PASSED" } else { "FAILED" };
+    println!("  Status: {}", status_text);
+    println!("  Jobs: {}", total_jobs);
+    println!("  Completed: {}", completed);
+    println!("  Failed: {}", failed);
 
-        let minutes = duration_secs / 60;
-        let seconds = duration_secs % 60;
-        println!("  Duration: {}m {}s", minutes, seconds);
-        println!("═══════════════════════════════════════════════════════════");
-        println!();
-    }
+    let minutes = duration_secs / 60;
+    let seconds = duration_secs % 60;
+    println!("  Duration: {}m {}s", minutes, seconds);
+    println!("═══════════════════════════════════════════════════════════");
+    println!();
 }
 
 /// Helper for phase progress display
@@ -217,7 +146,7 @@ impl PhaseProgress {
         self.completed_slots = self.slot_results.len();
 
         // In non-interactive mode, print each completion
-        if !is_interactive() && level() >= OutputLevel::Normal {
+        if !is_interactive() {
             let status = if success { "PASS" } else { "FAIL" };
             let duration_s = duration_ms as f64 / 1000.0;
             println!("[PHASE]   {} {} {:.1}s", slot_id, status, duration_s);
@@ -226,7 +155,7 @@ impl PhaseProgress {
 
     pub fn finish(&self) {
         // In non-interactive mode, print phase completion summary
-        if !is_interactive() && level() >= OutputLevel::Normal {
+        if !is_interactive() {
             let passed = self
                 .slot_results
                 .iter()
@@ -256,37 +185,27 @@ impl MessageType {
     pub fn print(&self) {
         match self {
             MessageType::Success(msg) => {
-                if level() >= OutputLevel::Normal {
-                    println!("  ✓ {}", msg);
-                }
+                println!("  {}", format!("OK: {}", msg).green());
             }
             MessageType::Warning(msg) => {
-                if level() >= OutputLevel::Normal {
-                    println!("  ! {}", msg);
-                }
+                println!("  {}", format!("! {}", msg).yellow());
             }
             MessageType::Error(msg) => {
-                eprintln!("  ✗ {}", msg);
+                eprintln!("  {}", format!("ERROR: {}", msg).red());
             }
             MessageType::Info(msg) => {
-                if level() >= OutputLevel::Verbose {
-                    println!("  → {}", msg);
-                }
+                println!("  → {}", msg);
             }
             MessageType::Debug(msg) => {
-                if level() >= OutputLevel::Debug {
-                    eprintln!("    · {}", msg);
-                }
+                eprintln!("    · {}", msg);
             }
             MessageType::Progress(msg, current, total) => {
-                if level() >= OutputLevel::Normal {
-                    let percentage = if *total > 0 {
-                        (*current * 100) / total
-                    } else {
-                        0
-                    };
-                    println!("  → {} [{}/{}] ({}%)", msg, current, total, percentage);
-                }
+                let percentage = if *total > 0 {
+                    (*current * 100) / total
+                } else {
+                    0
+                };
+                println!("  → {} [{}/{}] ({}%)", msg, current, total, percentage);
             }
         }
     }
@@ -311,52 +230,27 @@ pub fn progress_msg(message: impl AsRef<str>, current: usize, total: usize) {
 
 /// Print system operation (plug creation, worker spawn, etc.)
 pub fn system_operation(operation: impl AsRef<str>, target: impl AsRef<str>, success: bool) {
-    if level() >= OutputLevel::Normal {
-        let symbol = if success { "✓" } else { "✗" };
-        println!("  {} {} {}", symbol, operation.as_ref(), target.as_ref());
-    }
+    let symbol = if success { "OK" } else { "FAIL" };
+    println!("  {}: {} {}", symbol, operation.as_ref(), target.as_ref());
 }
 
 /// Print phase transition
 pub fn phase_transition(phase_name: impl AsRef<str>, slot_id: Option<&str>, started: bool) {
-    if level() >= OutputLevel::Normal {
-        let action = if started { "Starting" } else { "Completed" };
+    let action = if started { "Starting" } else { "Completed" };
 
-        match slot_id {
-            Some(slot) => println!("  ● {} phase: {} [{}]", action, phase_name.as_ref(), slot),
-            None => println!("  ● {} phase: {}", action, phase_name.as_ref()),
-        }
+    match slot_id {
+        Some(slot) => println!("  ● {} phase: {} [{}]", action, phase_name.as_ref(), slot),
+        None => println!("  ● {} phase: {}", action, phase_name.as_ref()),
     }
 }
 
 /// Print timeout warning
 pub fn timeout_warning(phase_name: impl AsRef<str>, slot_id: impl AsRef<str>, timeout_secs: u64) {
-    if level() >= OutputLevel::Normal {
-        println!(
-            "  ! Phase timeout: {} [{}] after {}s",
-            phase_name.as_ref(),
-            slot_id.as_ref(),
-            timeout_secs
-        );
-    }
+    println!(
+        "  ! Phase timeout: {} [{}] after {}s",
+        phase_name.as_ref(),
+        slot_id.as_ref(),
+        timeout_secs
+    );
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_output_levels() {
-        assert!(OutputLevel::Quiet < OutputLevel::Normal);
-        assert!(OutputLevel::Normal < OutputLevel::Verbose);
-        assert!(OutputLevel::Verbose < OutputLevel::Debug);
-    }
-
-    #[test]
-    fn test_from_cli_arg() {
-        assert_eq!(OutputLevel::from_cli_arg(true, 0), OutputLevel::Quiet);
-        assert_eq!(OutputLevel::from_cli_arg(false, 0), OutputLevel::Normal);
-        assert_eq!(OutputLevel::from_cli_arg(false, 1), OutputLevel::Verbose);
-        assert_eq!(OutputLevel::from_cli_arg(false, 2), OutputLevel::Debug);
-    }
-}

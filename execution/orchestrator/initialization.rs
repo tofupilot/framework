@@ -391,11 +391,6 @@ impl Orchestrator {
             }
             ExecutionStrategy::PhaseFirst => {
                 // Phase-first: run same phase across all slots before moving to next phase
-                cli_output::print_section(
-                    cli_output::Section::Config,
-                    "Using PHASE-FIRST execution model (default)",
-                );
-
                 job_helpers::enqueue_jobs_by_stage_scope(
                     &mut state,
                     procedure,
@@ -446,15 +441,6 @@ impl Orchestrator {
         let plug_scope_operations =
             (procedure_plug_count * 2) + (slot_plug_count * slots.len() * 2);
         state.total_jobs_submitted += plug_scope_operations;
-
-        cli_output::print_section(
-            cli_output::Section::Init,
-            format!(
-                "Submitted {} jobs to queue ({} plug scope operations)",
-                state.job_queue.len(),
-                plug_scope_operations
-            ),
-        );
 
         // Emit execution plan to frontend
         self.emit_execution_plan(procedure, &state, &slots).await;

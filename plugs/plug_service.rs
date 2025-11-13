@@ -551,7 +551,7 @@ impl PlugServiceManager {
                     Ok(Some(status)) => {
                         let elapsed = teardown_start.elapsed();
                         crate::cli_output::success(format!(
-                            "✓ Plug {} exited gracefully in {:.1}s (status: {:?})",
+                            "OK: Plug {} exited gracefully in {:.1}s (status: {:?})",
                             plug_name,
                             elapsed.as_secs_f32(),
                             status
@@ -576,7 +576,7 @@ impl PlugServiceManager {
 
             // Step 3: Graceful timeout exceeded - send SIGTERM
             crate::cli_output::warning(format!(
-                "⚠️  Plug {} did not exit after {:.1}s, sending SIGTERM",
+                "WARNING:  Plug {} did not exit after {:.1}s, sending SIGTERM",
                 plug_name,
                 max_wait.as_secs_f32()
             ));
@@ -598,7 +598,7 @@ impl PlugServiceManager {
                 Ok(None) => {
                     // Step 5: Force kill with SIGKILL
                     crate::cli_output::error(format!(
-                        "⚠️  Force killing {} with SIGKILL",
+                        "WARNING:  Force killing {} with SIGKILL",
                         plug_name
                     ));
 
@@ -643,7 +643,7 @@ impl PlugServiceManager {
             let pid = service.process.id();
 
             crate::cli_output::warning(format!(
-                "⚠️  Force killing plug service {} (PID: {:?}) with SIGKILL",
+                "WARNING:  Force killing plug service {} (PID: {:?}) with SIGKILL",
                 plug_name, pid
             ));
 

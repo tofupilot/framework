@@ -21,6 +21,7 @@ pub struct DashboardInfo {
     pub run_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
+    #[serde(alias = "sync_error")]
     pub upload_error: Option<String>,
 }
 
