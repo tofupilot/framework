@@ -2,7 +2,7 @@
 //!
 //! This library provides orchestration, execution, and validation for YAML-defined
 //! test procedures with Python phases, instrument control via plugs, and
-//! parallel execution across multiple test slots.
+//! parallel execution across multiple test slots with resource-aware scheduling.
 //!
 //! # Core Components
 //!

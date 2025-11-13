@@ -152,6 +152,7 @@ impl OrchestratorState {
                 completed_at: chrono::Utc::now(),
                 resource_metrics: None,
                 unit: None,
+                retry_count: job.retry_count,
             };
             // Cancelled jobs from queue are original jobs (not yet started)
             if job.retry_count == 0 {
@@ -188,6 +189,7 @@ impl OrchestratorState {
                 completed_at: chrono::Utc::now(),
                 resource_metrics: None,
                 unit: None,
+                retry_count: job.retry_count,
             };
             // Cancelled jobs from queue are original jobs (not yet started)
             if job.retry_count == 0 {
