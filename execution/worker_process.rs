@@ -93,11 +93,6 @@ impl ProcessManager {
             .arg(&abs_procedure_dir)
             .env("WORKER_ID", self.worker_id.to_string())
             .env("PYTHONUNBUFFERED", "1")
-            // Remove PYTHONHOME/PYTHONPATH to prevent AppImage from breaking system Python.
-            // AppImage sets these to point to its internal filesystem, causing system Python
-            // to fail with "No module named 'encodings'" when loading its stdlib.
-            .env_remove("PYTHONHOME")
-            .env_remove("PYTHONPATH")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

@@ -1,7 +1,9 @@
 use std::path::Path;
 use tauri::AppHandle;
-use tauri_plugin_shell::ShellExt;
 
+use super::environment::create_virtual_environment;
+use super::installation::ensure_python_available;
+use super::manifest::{create_pyproject, extract_version_hint, get_python_version_requirement};
 use super::utils::{find_venv_path, get_venv_python_path};
 
 pub async fn resolve_python_executable(
@@ -16,119 +18,78 @@ pub async fn resolve_python_executable(
         }
     }
 
-    let python_version_req = crate::python::manifest::get_python_version_requirement(project_path);
+    let app_handle = app.ok_or_else(|| {
+        "No app handle provided for Python environment management.\n\n\
+        Python resolution requires UV to install and manage Python versions.\n\
+        This is an internal error - please report this issue."
+            .to_string()
+    })?;
 
-    log::debug!(
-        "Searching for Python in project directory: {}",
-        project_path.display()
+    create_pyproject(project_path).ok();
+
+    let python_version_req = get_python_version_requirement(project_path);
+    let version_hint = python_version_req
+        .as_ref()
+        .map(|v| extract_version_hint(v))
+        .unwrap_or_else(|| "3.11".to_string());
+
+    log::info!(
+        "No venv found. Will install Python {} via UV and create venv",
+        version_hint
     );
 
-    let mut args = vec!["python", "find"];
-    let version_arg;
     if let Some(ref version) = python_version_req {
         log::info!("pyproject.toml requires Python: {}", version);
-        let version_hint = crate::python::manifest::extract_version_hint(version);
-        version_arg = version_hint;
-        args.push(&version_arg);
     }
 
-    let (success, stdout, stderr) = if let Some(app_handle) = app {
-        // GUI mode: use Tauri sidecar
-        let output = app_handle
-            .shell()
-            .sidecar("uv")
-            .map_err(|e| {
-                log::error!("Failed to get UV sidecar: {}", e);
-                format!(
-                    "UV binary not found: {}\n\n\
-                    This is likely a bundling issue. Please ensure the UV binary is included in the application resources.",
-                    e
-                )
-            })?
-            .args(&args)
-            .current_dir(project_path)
-            .output()
-            .await
-            .map_err(|e| {
-                log::error!("Failed to execute 'uv python find': {}", e);
-                format!("Failed to execute UV to find Python: {}", e)
-            })?;
-        (output.status.success(), output.stdout, output.stderr)
-    } else {
-        // CLI mode: use bundled uv binary
-        let uv_binary_name = if cfg!(target_os = "macos") {
-            if cfg!(target_arch = "aarch64") {
-                "uv-aarch64-apple-darwin"
-            } else {
-                "uv-x86_64-apple-darwin"
-            }
-        } else if cfg!(target_os = "windows") {
-            "uv-x86_64-pc-windows-msvc.exe"
-        } else {
-            if cfg!(target_arch = "aarch64") {
-                "uv-aarch64-unknown-linux-gnu"
-            } else {
-                "uv-x86_64-unknown-linux-gnu"
-            }
-        };
+    ensure_python_available(app_handle, &version_hint)
+        .await
+        .map_err(|e| {
+            format!(
+                "Failed to ensure Python {} is available via UV: {}\n\n\
+                UV could not install Python automatically.\n\
+                This may be due to network issues or UV installation problems.",
+                version_hint, e
+            )
+        })?;
 
-        // Find UV binary next to the executable
-        let exe_path = std::env::current_exe().map_err(|e| format!("Failed to get executable path: {}", e))?;
-        let exe_dir = exe_path.parent().ok_or("Failed to get executable directory")?;
-        let uv_binary = exe_dir.join(uv_binary_name);
+    log::info!(
+        "Python {} is available via UV, creating virtual environment",
+        version_hint
+    );
 
-        if !uv_binary.exists() {
-            return Err(format!("UV binary not found at {:?}. Expected to find it next to the tofupilot executable.", uv_binary));
-        }
+    create_virtual_environment(app_handle, project_path, Some(&version_hint))
+        .await
+        .map_err(|e| {
+            format!(
+                "Failed to create virtual environment with Python {}: {}\n\n\
+                UV failed to create a virtual environment.\n\
+                Please check that you have write permissions in the project directory.",
+                version_hint, e
+            )
+        })?;
 
-        let output = tokio::process::Command::new(&uv_binary)
-            .args(&args)
-            .current_dir(project_path)
-            .output()
-            .await
-            .map_err(|e| {
-                log::error!("Failed to execute bundled UV at {:?}: {}", uv_binary, e);
-                format!("Failed to execute UV to find Python: {}. UV binary not found at {:?}", e, uv_binary)
-            })?;
-        (output.status.success(), output.stdout, output.stderr)
-    };
+    let venv_path = find_venv_path(project_path).ok_or_else(|| {
+        "Virtual environment was created but could not be found.\n\n\
+        This is an internal error - the venv should exist at .venv or venv in the project directory."
+            .to_string()
+    })?;
 
-    if !success {
-        let stderr = String::from_utf8_lossy(&stderr);
-        log::error!("UV python find failed: {}", stderr);
-        let version_msg = if let Some(ver) = python_version_req {
-            format!("matching version requirement '{}' ", ver)
-        } else {
-            String::new()
-        };
+    let venv_python = get_venv_python_path(&venv_path);
+    if !venv_python.exists() {
         return Err(format!(
-            "UV could not find a Python installation {}.\n\n\
-            Error: {}\n\n\
-            To fix this:\n\
-            1. Check your pyproject.toml requires-python field\n\
-            2. Install a compatible Python version from python.org\n\
-            3. Or install via UV: uv python install 3.11\n\
-            4. Ensure Python is in your PATH",
-            version_msg,
-            stderr.trim()
+            "Virtual environment Python not found at: {}\n\n\
+            The venv was created but the Python executable is missing.\n\
+            This may indicate a problem with UV's venv creation.",
+            venv_python.display()
         ));
     }
 
-    let python_path = String::from_utf8_lossy(&stdout).trim().to_string();
-
-    if python_path.is_empty() {
-        log::error!("UV returned empty Python path");
-        return Err("No Python installation found by UV.\n\n\
-            To fix this:\n\
-            1. Check your pyproject.toml requires-python field\n\
-            2. Install Python 3.8 or later from python.org\n\
-            3. Or install via UV: uv python install 3.11\n\
-            4. Restart the application after installation"
-            .to_string());
-    }
-
-    log::info!("UV found Python: {}", python_path);
-    Ok(python_path)
+    log::info!(
+        "Successfully created venv with Python at: {}",
+        venv_python.display()
+    );
+    Ok(venv_python.to_string_lossy().to_string())
 }
 
 #[tauri::command]

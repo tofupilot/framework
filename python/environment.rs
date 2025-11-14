@@ -9,11 +9,16 @@ use super::utils::{find_venv_path, get_venv_python_path};
 
 #[tauri::command]
 pub async fn get_venv_info(app: AppHandle, directory: String) -> Result<VenvInfo, String> {
+    log::debug!("[get_venv_info] Checking directory: {}", directory);
     let path = Path::new(&directory);
 
     let venv_path = match find_venv_path(path) {
-        Some(p) => p,
+        Some(p) => {
+            log::debug!("[get_venv_info] Found venv at: {:?}", p);
+            p
+        }
         None => {
+            log::debug!("[get_venv_info] No venv found in directory");
             return Ok(VenvInfo {
                 exists: false,
                 path: None,
@@ -28,9 +33,7 @@ pub async fn get_venv_info(app: AppHandle, directory: String) -> Result<VenvInfo
 
     if venv_python.exists() {
         let mut cmd = StdCommand::new(&venv_python);
-        cmd.arg("--version")
-            .env_remove("PYTHONHOME")
-            .env_remove("PYTHONPATH");
+        cmd.arg("--version");
 
         crate::utils::configure_no_window(&mut cmd);
 
@@ -126,28 +129,30 @@ pub async fn check_venv_packages(
     Ok(packages)
 }
 
-#[tauri::command]
 pub async fn create_virtual_environment(
-    app: AppHandle,
-    procedure_dir: String,
-    python_version: Option<String>,
+    app: &AppHandle,
+    procedure_dir: &Path,
+    python_version: Option<&str>,
 ) -> Result<(), String> {
-    let version_to_use = python_version.or_else(|| {
-        let procedure_dir_buf = Path::new(&procedure_dir);
-        crate::python::manifest::get_python_version_requirement(procedure_dir_buf)
-            .map(|v| crate::python::manifest::extract_version_hint(&v))
-    });
+    let version_string;
+    let version_to_use = if let Some(version) = python_version {
+        Some(version)
+    } else {
+        version_string = crate::python::manifest::get_python_version_requirement(procedure_dir)
+            .map(|v| crate::python::manifest::extract_version_hint(&v));
+        version_string.as_deref()
+    };
 
     let mut command = app
         .shell()
         .sidecar("uv")
         .map_err(|e| format!("Failed to get UV sidecar: {}", e))?
         .args(&["venv", ".venv"])
-        .current_dir(&procedure_dir);
+        .current_dir(procedure_dir);
 
     if let Some(version) = version_to_use {
         log::info!("Creating venv with Python version: {}", version);
-        command = command.args(&["--python", &version]);
+        command = command.args(&["--python", version]);
     }
 
     let output = command
@@ -164,6 +169,15 @@ pub async fn create_virtual_environment(
 
     log::info!("Virtual environment created successfully with UV");
     Ok(())
+}
+
+#[tauri::command]
+pub async fn create_virtual_environment_command(
+    app: AppHandle,
+    procedure_dir: String,
+    python_version: Option<String>,
+) -> Result<(), String> {
+    create_virtual_environment(&app, Path::new(&procedure_dir), python_version.as_deref()).await
 }
 
 #[tauri::command]

@@ -740,9 +740,7 @@ print(json.dumps(results))
         .arg(python_script)
         .arg(serde_json::to_string(&modules_to_check).unwrap_or_default())
         .arg(project_dir.to_string_lossy().to_string())
-        .arg(serde_json::to_string(&available_plugs).unwrap_or_default())
-        .env_remove("PYTHONHOME")
-        .env_remove("PYTHONPATH");
+        .arg(serde_json::to_string(&available_plugs).unwrap_or_default());
 
     crate::utils::configure_no_window(&mut cmd);
 

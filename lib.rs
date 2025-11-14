@@ -2358,9 +2358,7 @@ if __name__ == '__main__':
     let mut cmd = StdCommand::new(&python_path);
     cmd.arg("-c")
         .arg(python_script)
-        .arg(&file_path)
-        .env_remove("PYTHONHOME")
-        .env_remove("PYTHONPATH");
+        .arg(&file_path);
 
     utils::configure_no_window(&mut cmd);
 
@@ -2498,7 +2496,7 @@ pub fn run() {
             kill_execution,
             stop_slot,
             load_procedure_config,
-            python::environment::create_virtual_environment,
+            python::environment::create_virtual_environment_command,
             python::environment::sync_pyproject_dependencies,
             python::environment::manual_sync_pyproject_dependencies,
             get_test_runs,

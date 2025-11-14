@@ -152,3 +152,30 @@ pub fn update_project_metadata(
 
     Ok(())
 }
+
+pub fn create_pyproject(project_path: &Path) -> Result<(), String> {
+    let pyproject_path = project_path.join("pyproject.toml");
+    if pyproject_path.exists() {
+        return Ok(());
+    }
+
+    let manifest = PythonManifest {
+        name: Some("procedure".to_string()),
+        version: Some("0.1.0".to_string()),
+        requires_python: Some(">=3.11".to_string()),
+        dependencies: Some(vec![]),
+        optional_dependencies: None,
+    };
+
+    let file = PyProjectFile {
+        project: Some(manifest),
+    };
+
+    let content =
+        toml::to_string(&file).map_err(|e| format!("Failed to serialize pyproject.toml: {}", e))?;
+
+    std::fs::write(&pyproject_path, content)
+        .map_err(|e| format!("Failed to write pyproject.toml: {}", e))?;
+
+    Ok(())
+}
