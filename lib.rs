@@ -122,6 +122,19 @@ pub struct PendingUnitInput {
     pub unit_config: Option<schema::UnitConfig>,
 }
 
+// Global state for deep link registration
+pub struct DeepLinkState {
+    pub is_registered: Arc<TokioMutex<bool>>,
+}
+
+impl Default for DeepLinkState {
+    fn default() -> Self {
+        Self {
+            is_registered: Arc::new(TokioMutex::new(false)),
+        }
+    }
+}
+
 // Global state for orchestrator instances
 pub struct OrchestratorState {
     pub orchestrators: Arc<TokioMutex<HashMap<String, Arc<TokioMutex<Orchestrator>>>>>,
@@ -466,6 +479,12 @@ async fn get_system_info() -> Result<String, String> {
     });
 
     Ok(info.to_string())
+}
+
+#[tauri::command]
+async fn is_deep_link_registered(state: tauri::State<'_, DeepLinkState>) -> Result<bool, String> {
+    let registered = state.is_registered.lock().await;
+    Ok(*registered)
 }
 
 #[tauri::command]
@@ -2389,7 +2408,6 @@ fn update_pyproject_metadata(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_fs::init())
@@ -2420,17 +2438,33 @@ pub fn run() {
                 }
             });
 
+            // Register deep link and track status
             #[cfg(any(target_os = "linux", target_os = "windows"))]
-            app.deep_link().register_all()?;
+            {
+                let registration_result = app.deep_link().register_all();
+                let deep_link_state = app.state::<DeepLinkState>();
+                let is_registered = registration_result.is_ok();
+
+                if let Err(e) = registration_result {
+                    log::warn!("Failed to register deep link: {}", e);
+                }
+
+                tauri::async_runtime::block_on(async {
+                    let mut registered = deep_link_state.is_registered.lock().await;
+                    *registered = is_registered;
+                });
+            }
 
             Ok(())
         })
+        .manage(DeepLinkState::default())
         .manage(OrchestratorState::default())
         .manage(UIResponseState::default())
         .manage(StandalonePlugServiceState::default())
         .manage(Arc::new(system_monitor::SystemMonitor::new()))
         .invoke_handler(tauri::generate_handler![
             get_system_info,
+            is_deep_link_registered,
             python::environment::get_venv_info,
             python::environment::check_venv_packages,
             python::resolution::resolve_python_for_project,
