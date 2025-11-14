@@ -28,7 +28,9 @@ pub async fn get_venv_info(app: AppHandle, directory: String) -> Result<VenvInfo
 
     if venv_python.exists() {
         let mut cmd = StdCommand::new(&venv_python);
-        cmd.arg("--version");
+        cmd.arg("--version")
+            .env_remove("PYTHONHOME")
+            .env_remove("PYTHONPATH");
 
         crate::utils::configure_no_window(&mut cmd);
 

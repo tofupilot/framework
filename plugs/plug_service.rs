@@ -174,6 +174,11 @@ impl PlugServiceManager {
             .arg(&base_plug_name)
             .arg("--plug-config")
             .arg(plug_config.to_string())
+            // Remove PYTHONHOME/PYTHONPATH to prevent AppImage from breaking system Python.
+            // AppImage sets these to point to its internal filesystem, causing system Python
+            // to fail with "No module named 'encodings'" when loading its stdlib.
+            .env_remove("PYTHONHOME")
+            .env_remove("PYTHONPATH")
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 

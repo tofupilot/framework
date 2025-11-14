@@ -2358,7 +2358,9 @@ if __name__ == '__main__':
     let mut cmd = StdCommand::new(&python_path);
     cmd.arg("-c")
         .arg(python_script)
-        .arg(&file_path);
+        .arg(&file_path)
+        .env_remove("PYTHONHOME")
+        .env_remove("PYTHONPATH");
 
     utils::configure_no_window(&mut cmd);
 
