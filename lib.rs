@@ -2420,6 +2420,9 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_single_instance::init(|_app, argv, _cwd| {
+            log::info!("Single instance: argv={:?}, deep link event was already triggered", argv);
+        }))
         .plugin(tauri_plugin_deep_link::init())
         .setup(|app| {
             use tauri::Manager;
@@ -2444,10 +2447,21 @@ pub fn run() {
             });
 
             // Register deep link and track status
+            let deep_link_state = app.state::<DeepLinkState>();
+
+            #[cfg(target_os = "macos")]
+            {
+                // macOS uses static Info.plist, schemes registered via config
+                tauri::async_runtime::block_on(async {
+                    let mut registered = deep_link_state.is_registered.lock().await;
+                    *registered = true;
+                });
+            }
+
             #[cfg(any(target_os = "linux", target_os = "windows"))]
             {
+                // Windows/Linux: register at runtime for dev/testing
                 let registration_result = app.deep_link().register_all();
-                let deep_link_state = app.state::<DeepLinkState>();
                 let is_registered = registration_result.is_ok();
 
                 if let Err(e) = registration_result {
