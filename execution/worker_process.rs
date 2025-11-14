@@ -77,8 +77,15 @@ impl ProcessManager {
             .map_err(|e| format!("Failed to canonicalize procedure dir: {}", e))?;
 
         let worker_script = self.find_worker_script(app_handle)?;
+        log::debug!("Worker {} using script: {}", self.worker_id, worker_script.display());
+
+        // Validate script exists and is readable
+        if !worker_script.exists() {
+            return Err(format!("Worker script not found: {}", worker_script.display()));
+        }
 
         let python_cmd = crate::python::resolve_python_executable(app_handle, &abs_procedure_dir).await?;
+        log::debug!("Worker {} using Python: {}", self.worker_id, python_cmd);
 
         let mut command = Command::new(&python_cmd);
         command
@@ -159,11 +166,14 @@ impl ProcessManager {
             let mut stderr_reader = BufReader::new(stderr);
             let mut line = String::new();
             while stderr_reader.read_line(&mut line).await.unwrap_or(0) > 0 {
-                crate::execution::cli_output::verbose(format!(
-                    "[Worker {}] Python stderr: {}",
-                    worker_id,
-                    line.trim()
-                ));
+                let trimmed = line.trim();
+                if !trimmed.is_empty() {
+                    crate::execution::cli_output::print_section(
+                        crate::execution::cli_output::Section::Worker,
+                        format!("[{}] Python: {}", worker_id, trimmed)
+                    );
+                    log::warn!("Worker {} Python stderr: {}", worker_id, trimmed);
+                }
                 line.clear();
             }
         });

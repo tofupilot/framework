@@ -629,12 +629,17 @@ async fn execute_parallel_runs(
         .or(procedure_def.worker_count)
         .unwrap_or_else(num_cpus::get);
 
+    log::info!("Initializing {} workers for execution", worker_count);
+
     let mut orchestrator = Orchestrator::new(worker_count, procedure_dir.clone());
     orchestrator.set_app_handle(app_handle.clone());
     orchestrator
         .initialize()
         .await
-        .map_err(|e| format!("Failed to initialize orchestrator: {}", e))?;
+        .map_err(|e| {
+            log::error!("Worker initialization failed: {}", e);
+            format!("Failed to initialize workers: {}", e)
+        })?;
 
     // Emit unit input request and wait for response
     let (unit_input_tx, unit_input_rx) = tokio::sync::oneshot::channel();

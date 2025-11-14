@@ -69,13 +69,26 @@ impl Worker {
         inner.ipc_handler.connect(stdin, stdout)?;
 
         // Wait for ready signal
-        let response: WorkerResponse = inner.ipc_handler.receive_json().await?;
+        log::debug!("Worker {} waiting for Ready signal from Python", self.id);
+
+        let response: WorkerResponse = inner.ipc_handler.receive_json().await.map_err(|e| {
+            log::error!("Worker {} failed to receive Ready signal: {}", self.id, e);
+            format!("Worker {} failed to receive Ready signal: {}", self.id, e)
+        })?;
+
         match response {
-            WorkerResponse::Ready => Ok(()),
-            WorkerResponse::Error { message } => {
-                Err(format!("Worker failed to start: {}", message))
+            WorkerResponse::Ready => {
+                log::debug!("Worker {} received Ready signal", self.id);
+                Ok(())
             }
-            _ => Err("Unexpected response from worker".to_string()),
+            WorkerResponse::Error { message } => {
+                log::error!("Worker {} startup error: {}", self.id, message);
+                Err(format!("Worker {} failed to start: {}", self.id, message))
+            }
+            _ => {
+                log::error!("Worker {} received unexpected response: {:?}", self.id, response);
+                Err(format!("Worker {} received unexpected response: {:?}", self.id, response))
+            }
         }
     }
 
