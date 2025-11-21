@@ -857,21 +857,6 @@ impl PhaseDefinition {
         self.name.clone()
     }
 
-    pub fn validate_measurement_uniqueness(&self) -> Result<(), String> {
-        let mut seen_keys: HashSet<String> = HashSet::new();
-        for measurement in &self.measurements {
-            let key = &measurement.key;
-            if seen_keys.contains(key) {
-                return Err(format!(
-                    "Phase '{}' has duplicate measurement key: '{}'",
-                    self.name,
-                    key
-                ));
-            }
-            seen_keys.insert(key.clone());
-        }
-        Ok(())
-    }
 
     pub fn validate_single_runtime(&self) -> Result<(), String> {
         let has_python = self.python.is_some();

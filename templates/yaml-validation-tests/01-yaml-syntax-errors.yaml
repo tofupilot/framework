@@ -1,0 +1,34 @@
+# YAML Syntax Errors - Basic YAML parsing issues
+
+name: YAML Syntax Test
+version: 1.0.0
+
+# Invalid indentation
+main:
+  - key: phase1
+    name: "Phase 1"
+      invalid_indent: value
+
+# Unclosed bracket
+execution:
+  slots: ["unit1", "unit2"
+
+# Missing colon
+main
+  - key: phase2
+
+# Duplicate keys at same level
+plugs:
+  key: value1
+  key: value2
+
+# Invalid tab character (spaces expected)
+	tabs_not_allowed: value
+
+# Unclosed quote
+description: "This is unclosed
+
+# Invalid list item
+main:
+  - key: item1
+  - - nested_wrong

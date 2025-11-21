@@ -1,211 +1,212 @@
-name: Banc de Test Main2
+name: Banc de Test Main
 version: 0.0.1
 description: Test de production pour l'assemblage de la main Mirokai
 
 execution:
+  strategy: phase_first
   workers: 8
   on_first_failure: stop
   slots:
-    - key: slot_a
-      name: SLOT_A
+  - key: slot_a
+    name: SLOT_A
 
 unit: {}
 
 plugs:
-  - name: EtherCAT
-    scope: each
-    python: plugs.python.ethercat:EtherCATManager
-    description: Contrôleur EtherCAT pour piloter les moteurs de la main via HAL2
+- name: EtherCAT
+  scope: each
+  python: plugs.python.ethercat:EtherCATManager
+  description: Contrôleur EtherCAT pour piloter les moteurs de la main via HAL2
 
 setup:
-  - name: Initialisation EtherCAT2
-    python: phases.check_hall_sensors
-    description: Détection de l'interface EtherCAT et démarrage des services HAL
+- name: Initialisation EtherCAT2
+  python: phases.check_hall_sensors
+  description: Détection de l'interface EtherCAT et démarrage des services HAL
 
 main:
-  - name: Contrôle Moteurs Doigts
-    python: phases/inspect_finger_motors
-    description: Vérification visuelle du mouvement des doigts2
-    measurements:
-      - name: Fingers Ok
-        validators:
-          - operator: ==
-            expected_value: true
-        description: Les doigts se déplacent correctement
-    ui:
-      components:
-        - type: switch
-          key: fingers_ok2
-          label: Mouvement des doigts OK
-          description: Les doigts se déplacent-ils correctement ?
-          required: false
-          bind: measurements.fingers_ok
-          default_value: Wqwe
-          trim: true
-          options:
-            - value: "true"
-              label: Oui
-            - value: "false"
-              label: Non
-        - type: progress
-          key: progress
-          label: This is an amazing progress
-          description: This is still an amazing progress
-          required: false
-          default_value: 2.5
-          trim: true
-          min: 0.0
-          max: 5.5
-          options: []
-        - type: text
-          key: text
-          required: false
-          trim: true
-          options: []
-          size: 4xl
-          color: zinc
-          font: default
-  - name: Contrôle Moteur Pouce
-    python: phases/inspect_thumb_motor
-    description: Vérification visuelle du mouvement du pouce
-    measurements:
-      - name: Thumb Ok
-        validators:
-          - operator: ==
-            expected_value: true
-        description: Le pouce se déplace correctement
-    ui:
-      components:
-        - type: switch
-          key: thumb_ok
-          label: Mouvement du pouce OK
-          description: Le pouce se déplace-t-il correctement ?
-          required: true
-          bind: measurements.thumb_ok
-          trim: true
-          options:
-            - value: "true"
-              label: Oui
-            - value: "false"
-              label: Non
-    depends_on:
-      - controle_moteurs_doigts
-  - key: test_capteurs_hall
-    name: Test Capteurs Hall3
-    python: phases/check_hall_sensors
-    description: Validation des capteurs à effet Hall avec et sans poignée
-    measurements:
-      - name: Top Magnetic Field Delta X
-        unit: T
-        validators:
-          - operator: ">="
-            expected_value: 0.01
-        description: Capteur haut - Variation champ magnétique axe X avec poignée
-      - name: Top Magnetic Field Delta Y
-        unit: T
-        validators:
-          - operator: ">="
-            expected_value: 0.01
-        description: Capteur haut - Variation champ magnétique axe Y avec poignée
-      - name: Top Magnetic Field Delta Z
-        unit: T
-        validators:
-          - operator: ">="
-            expected_value: 0.01
-        description: Capteur haut - Variation champ magnétique axe Z avec poignée
-      - name: Top Check Order X
-        unit: T
-        validators:
-          - operator: ">="
-            expected_value: 0.0
-        description: Capteur haut - Augmentation champ magnétique axe X
-      - name: Top Check Order Y
-        unit: T
-        validators:
-          - operator: ">="
-            expected_value: 0.0
-        description: Capteur haut - Augmentation champ magnétique axe Y
-      - name: Top Check Order Z
-        unit: T
-        validators:
-          - operator: ">="
-            expected_value: 0.0
-        description: Capteur haut - Augmentation champ magnétique axe Z
-      - name: Bot Magnetic Field Delta X
-        unit: T
-        validators:
-          - operator: ">="
-            expected_value: 0.01
-        description: Capteur bas - Variation champ magnétique axe X avec poignée
-      - name: Bot Magnetic Field Delta Y
-        unit: T
-        validators:
-          - operator: ">="
-            expected_value: 0.01
-        description: Capteur bas - Variation champ magnétique axe Y avec poignée
-      - name: Bot Magnetic Field Delta Z
-        unit: T
-        validators:
-          - operator: ">="
-            expected_value: 0.01
-        description: Capteur bas - Variation champ magnétique axe Z avec poignée
-      - name: Bot Check Order X
-        unit: T
-        validators:
-          - operator: ">="
-            expected_value: 0.0
-        description: Capteur bas - Augmentation champ magnétique axe X
-      - name: Bot Check Order Y
-        unit: T
-        validators:
-          - operator: ">="
-            expected_value: 0.0
-        description: Capteur bas - Augmentation champ magnétique axe Y
-      - name: Bot Check Order Z
-        unit: T
-        validators:
-          - operator: ">="
-            expected_value: 0.0
-        description: Capteur bas - Augmentation champ magnétique axe Z
-      - name: Temperature Range Test
-        unit: °C
-        validators:
-          - operator: ">"
-            expected_value: 10.0
-          - operator: <
-            expected_value: 30.0
-          - operator: "!="
-            expected_value: 15.0
-        description: Test de température avec validation de plage
-    depends_on:
-      - Contrôle Moteurs Doigts
-  - name: Test Capteurs Proximité
-    python: phases/check_proximity_sensors
-    description: Validation des capteurs de proximité avec et sans poignée
-    measurements:
-      - name: Top Force Delta
-        unit: lux
-        validators:
-          - operator: ">="
-            expected_value: 1800.0
-        description: Capteur haut - Variation intensité lumineuse (force) avec poignée saisie
-      - name: Top Check Order
-        unit: lux
-        validators:
-          - operator: ">="
-            expected_value: 0.0
-        description: Capteur haut - Diminution intensité lumineuse avec poignée
-      - name: Bot Force Delta
-        unit: lux
-        validators:
-          - operator: ">="
-            expected_value: 1800.0
-        description: Capteur bas - Variation intensité lumineuse (force) avec poignée saisie
-      - name: Bot Check Order
-        unit: lux
-        validators:
-          - operator: ">="
-            expected_value: 0.0
-        description: Capteur bas - Diminution intensité lumineuse avec poignée
-    depends_on:
-      - test_capteurs_hall
+- name: Contrôle Moteurs Doigts
+  python: phases/inspect_finger_motors
+  description: Vérification visuelle du mouvement des doigts2
+  measurements:
+  - name: Fingers Ok
+    validators:
+    - operator: ==
+      expected_value: true
+    description: Les doigts se déplacent correctement
+  ui:
+    components:
+    - type: switch
+      key: fingers_ok2
+      label: Mouvement des doigts OK
+      description: Les doigts se déplacent-ils correctement ?
+      required: false
+      bind: measurements.fingers_ok
+      default_value: Wqwe
+      trim: true
+      options:
+      - value: 'true'
+        label: Oui
+      - value: 'false'
+        label: Non
+    - type: progress
+      key: progress
+      label: This is an amazing progress
+      description: This is still an amazing progress
+      required: false
+      default_value: 2.5
+      trim: true
+      min: 0.0
+      max: 5.5
+      options: []
+    - type: text
+      key: text
+      required: false
+      trim: true
+      options: []
+      size: 4xl
+      color: zinc
+      font: default
+- name: Contrôle Moteur Pouce
+  python: phases/inspect_thumb_motor
+  description: Vérification visuelle du mouvement du pouce
+  measurements:
+  - name: Thumb Ok
+    validators:
+    - operator: ==
+      expected_value: true
+    description: Le pouce se déplace correctement
+  ui:
+    components:
+    - type: switch
+      key: thumb_ok
+      label: Mouvement du pouce OK
+      description: Le pouce se déplace-t-il correctement ?
+      required: true
+      bind: measurements.thumb_ok
+      trim: true
+      options:
+      - value: 'true'
+        label: Oui
+      - value: 'false'
+        label: Non
+  depends_on:
+  - controle_moteurs_doigts
+- key: test_capteurs_hall
+  name: Test Capteurs Hall3
+  python: phases/check_hall_sensors
+  description: Validation des capteurs à effet Hall avec et sans poignée
+  measurements:
+  - name: Top Magnetic Field Delta X
+    unit: T
+    validators:
+    - operator: '>='
+      expected_value: 0.01
+    description: Capteur haut - Variation champ magnétique axe X avec poignée
+  - name: Top Magnetic Field Delta Y
+    unit: T
+    validators:
+    - operator: '>='
+      expected_value: 0.01
+    description: Capteur haut - Variation champ magnétique axe Y avec poignée
+  - name: Top Magnetic Field Delta Z
+    unit: T
+    validators:
+    - operator: '>='
+      expected_value: 0.01
+    description: Capteur haut - Variation champ magnétique axe Z avec poignée
+  - name: Top Check Order X
+    unit: T
+    validators:
+    - operator: '>='
+      expected_value: 0.0
+    description: Capteur haut - Augmentation champ magnétique axe X
+  - name: Top Check Order Y
+    unit: T
+    validators:
+    - operator: '>='
+      expected_value: 0.0
+    description: Capteur haut - Augmentation champ magnétique axe Y
+  - name: Top Check Order Z
+    unit: T
+    validators:
+    - operator: '>='
+      expected_value: 0.0
+    description: Capteur haut - Augmentation champ magnétique axe Z
+  - name: Bot Magnetic Field Delta X
+    unit: T
+    validators:
+    - operator: '>='
+      expected_value: 0.01
+    description: Capteur bas - Variation champ magnétique axe X avec poignée
+  - name: Bot Magnetic Field Delta Y
+    unit: T
+    validators:
+    - operator: '>='
+      expected_value: 0.01
+    description: Capteur bas - Variation champ magnétique axe Y avec poignée
+  - name: Bot Magnetic Field Delta Z
+    unit: T
+    validators:
+    - operator: '>='
+      expected_value: 0.01
+    description: Capteur bas - Variation champ magnétique axe Z avec poignée
+  - name: Bot Check Order X
+    unit: T
+    validators:
+    - operator: '>='
+      expected_value: 0.0
+    description: Capteur bas - Augmentation champ magnétique axe X
+  - name: Bot Check Order Y
+    unit: T
+    validators:
+    - operator: '>='
+      expected_value: 0.0
+    description: Capteur bas - Augmentation champ magnétique axe Y
+  - name: Bot Check Order Z
+    unit: T
+    validators:
+    - operator: '>='
+      expected_value: 0.0
+    description: Capteur bas - Augmentation champ magnétique axe Z
+  - name: Temperature Range Test
+    unit: °C
+    validators:
+    - operator: '>'
+      expected_value: 10.0
+    - operator: <
+      expected_value: 30.0
+    - operator: '!='
+      expected_value: 15.0
+    description: Test de température avec validation de plage
+  depends_on:
+  - Contrôle Moteurs Doigts
+- name: Test Capteurs Proximité
+  python: phases/check_proximity_sensors:check_proximity_sensors
+  description: Validation des capteurs de proximité avec et sans poignée
+  measurements:
+  - name: Top Force Delta
+    unit: lux
+    validators:
+    - operator: '>='
+      expected_value: 1800.0
+    description: Capteur haut - Variation intensité lumineuse (force) avec poignée saisie
+  - name: Top Check Order
+    unit: lux
+    validators:
+    - operator: '>='
+      expected_value: 0.0
+    description: Capteur haut - Diminution intensité lumineuse avec poignée
+  - name: Bot Force Delta
+    unit: lux
+    validators:
+    - operator: '>='
+      expected_value: 1800.0
+    description: Capteur bas - Variation intensité lumineuse (force) avec poignée saisie
+  - name: Bot Check Order
+    unit: lux
+    validators:
+    - operator: '>='
+      expected_value: 0.0
+    description: Capteur bas - Diminution intensité lumineuse avec poignée
+  depends_on:
+  - test_capteurs_hall

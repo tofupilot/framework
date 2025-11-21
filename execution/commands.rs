@@ -143,30 +143,6 @@ pub async fn execute_parallel_runs(
     let procedure_def = crate::procedure::load_procedure_definition(&procedure_file_buf)
         .map_err(|e| format!("Failed to load procedure: {}", e))?;
 
-    let yaml_content = std::fs::read_to_string(&procedure_file_buf)
-        .map_err(|e| format!("Failed to read YAML file: {}", e))?;
-
-    // Validate procedure before execution
-    let validation_result = validation::validate_procedure_with_yaml(
-        &app_handle,
-        &procedure_def,
-        &yaml_content,
-        &procedure_dir,
-    )
-    .await;
-    if !validation_result.is_valid {
-        let error_messages: Vec<String> = validation_result
-            .diagnostics
-            .iter()
-            .filter(|d| matches!(d.severity, validation::DiagnosticSeverity::Error))
-            .map(|d| format!("• {}", d.message))
-            .collect();
-        return Err(format!(
-            "Procedure validation failed:\n{}",
-            error_messages.join("\n")
-        ));
-    }
-
     // Validate slot names
     let slot_diagnostics = validation::validate_slot_names(&slots);
     let slot_errors: Vec<_> = slot_diagnostics

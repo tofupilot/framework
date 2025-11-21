@@ -157,7 +157,6 @@ pub async fn save_editor_settings(app: AppHandle, settings: EditorSettings) -> R
 pub async fn save_yaml_config(procedure_file: String, config_json: String) -> Result<String, String> {
     use std::fs;
     use validator::Validate;
-    use std::collections::HashSet;
 
     // Deserialize from JSON (Runtime types with required keys)
     let runtime_config: schema::ProcedureDefinition =
@@ -175,32 +174,6 @@ pub async fn save_yaml_config(procedure_file: String, config_json: String) -> Re
     runtime_config
         .validate()
         .map_err(|e| format!("Validation failed: {}", e))?;
-
-    // Check for duplicate phase keys
-    let all_phases: Vec<_> = runtime_config.setup.iter()
-        .chain(runtime_config.main.iter())
-        .chain(runtime_config.teardown.iter())
-        .collect();
-
-    let mut phase_keys = HashSet::new();
-    for phase in &all_phases {
-        if !phase_keys.insert(&phase.key) {
-            return Err(format!("Duplicate phase key: '{}'", phase.key));
-        }
-    }
-
-    // Check for duplicate measurement keys within each phase
-    for phase in &all_phases {
-        let mut meas_keys = HashSet::new();
-        for meas in &phase.measurements {
-            if !meas_keys.insert(&meas.key) {
-                return Err(format!(
-                    "Phase '{}' has duplicate measurement key: '{}'",
-                    phase.name, meas.key
-                ));
-            }
-        }
-    }
 
     // Convert to YAML types (strips auto-generated keys)
     let yaml_config = runtime_config.to_yaml();

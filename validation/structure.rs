@@ -5,6 +5,10 @@ use crate::procedure::schema::ProcedureDefinition;
 use super::types::{ValidationDiagnostic, RelatedDiagnosticInfo};
 use super::location_map::YamlLocationMap;
 
+#[cfg(test)]
+#[path = "structure_tests.rs"]
+mod tests;
+
 fn check_duplicates<F>(
     diagnostics: &mut Vec<ValidationDiagnostic>,
     items: impl Iterator<Item = String>,
@@ -53,14 +57,21 @@ pub(super) fn validate_structure(
         .chain(procedure.teardown.iter())
         .collect();
 
+    // Check duplicate phase keys
     check_duplicates(
         &mut diagnostics,
-        all_phases.iter().map(|p| p.name.clone()),
-        |name| location_map.get_phase_location(name),
-        "duplicate-phase-name",
-        "phase name",
+        all_phases.iter().map(|p| p.key.clone()),
+        |key| {
+            all_phases
+                .iter()
+                .find(|p| &p.key == key)
+                .and_then(|p| location_map.get_phase_location(&p.name))
+        },
+        "duplicate-phase-key",
+        "phase key",
     );
 
+    // Check duplicate plug keys
     check_duplicates(
         &mut diagnostics,
         procedure.plugs.iter().map(|p| p.key.clone()),
@@ -68,6 +79,37 @@ pub(super) fn validate_structure(
         "duplicate-plug-key",
         "plug key",
     );
+
+    // Check duplicate measurement keys within each phase
+    for phase in &all_phases {
+        let mut seen_meas_keys: HashMap<String, (usize, usize, usize)> = HashMap::new();
+
+        for meas in &phase.measurements {
+            if let Some(existing_loc) = seen_meas_keys.get(&meas.key) {
+                // Use phase location as fallback for measurement location
+                if let Some((line, col, len)) = location_map.get_phase_location(&phase.name) {
+                    diagnostics.push(
+                        ValidationDiagnostic::error(
+                            "duplicate-measurement-key",
+                            format!("Phase '{}' has duplicate measurement key: '{}'", phase.name, meas.key),
+                            line,
+                            col,
+                            len,
+                        )
+                        .with_related(vec![RelatedDiagnosticInfo {
+                            message: "Also defined here".to_string(),
+                            start_line: existing_loc.0,
+                            start_column: existing_loc.1,
+                            end_line: existing_loc.0,
+                            end_column: existing_loc.1 + existing_loc.2,
+                        }]),
+                    );
+                }
+            } else if let Some(loc) = location_map.get_phase_location(&phase.name) {
+                seen_meas_keys.insert(meas.key.clone(), loc);
+            }
+        }
+    }
 
     let phase_keys_set: HashSet<String> = all_phases.iter().map(|p| p.key.clone()).collect();
     for phase in &all_phases {

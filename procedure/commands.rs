@@ -40,26 +40,15 @@ pub async fn load_procedure(
     let yaml_content = std::fs::read_to_string(path)
         .map_err(|e| CommandError::io_error(format!("Failed to read {}: {}", path.display(), e)))?;
 
-    let yaml_config: crate::procedure::schema::ProcedureYaml = serde_yaml::from_str(&yaml_content)
-        .map_err(CommandError::yaml_parse_error)?;
+    log::info!("[LOAD_PROCEDURE] Loading: {}", procedure_file);
+    let (config, validation) = crate::validation::load_and_validate(
+        &app_handle,
+        &yaml_content,
+        &PathBuf::from(&procedure_dir),
+    )
+    .await;
 
-    let config: crate::procedure::schema::ProcedureDefinition = yaml_config.into();
-
-    let syntax_validation = crate::validation::validate_yaml_syntax(&yaml_content);
-    let validation = if !syntax_validation.is_valid {
-        syntax_validation
-    } else {
-        let procedure_def = crate::procedure::load_procedure_definition(path)
-            .map_err(CommandError::validation_error)?;
-
-        crate::validation::validate_procedure_with_yaml(
-            &app_handle,
-            &procedure_def,
-            &yaml_content,
-            &PathBuf::from(&procedure_dir),
-        )
-        .await
-    };
+    log::info!("[LOAD_PROCEDURE] Returning validation: valid={}, diagnostics={}", validation.is_valid, validation.diagnostics.len());
 
     Ok(LoadProcedureResponse {
         procedure_dir,

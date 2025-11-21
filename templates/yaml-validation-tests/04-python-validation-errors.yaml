@@ -1,0 +1,60 @@
+# Python Module Validation Errors - Missing Python files
+
+name: Python Validation Test
+version: 1.0.0
+
+# Missing Python modules in main phases
+main:
+  - key: missing_main1
+    name: "Missing Main 1"
+    python: nonexistent_module_main1
+
+  - key: missing_main2
+    name: "Missing Main 2"
+    python: fake_module_that_does_not_exist
+
+  - key: missing_main3
+    name: "Missing Main 3"
+    python: another_missing_module
+
+  - key: missing_main4
+    name: "Missing Main 4"
+    python: invalid_python_file
+
+# Missing Python modules in setup
+setup:
+  - key: missing_setup1
+    name: "Missing Setup 1"
+    python: nonexistent_setup_module
+
+  - key: missing_setup2
+    name: "Missing Setup 2"
+    python: fake_setup_module
+
+# Missing Python modules in teardown
+teardown:
+  - key: missing_teardown1
+    name: "Missing Teardown 1"
+    python: nonexistent_teardown_module
+
+  - key: missing_teardown2
+    name: "Missing Teardown 2"
+    python: fake_teardown_module
+
+# Missing Python modules in plugs
+plugs:
+  - key: missing_plug1
+    name: "Missing Plug 1"
+    python: nonexistent_plug_module
+
+  - key: missing_plug2
+    name: "Missing Plug 2"
+    python: fake_plug_module
+
+  - key: missing_plug3
+    name: "Missing Plug 3"
+    python: another_missing_plug
+
+  - key: missing_plug4
+    name: "Missing Plug 4"
+    python: invalid_plug_module

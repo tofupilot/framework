@@ -3,143 +3,145 @@ version: 1.0.0
 description: Demonstrates all operator UI components and interactions
 
 execution:
+  strategy: phase_first
   workers: 2
   on_first_failure: continue
 
 unit:
   serial_number:
-    default_value: "0000"
+    default_value: '0000'
   part_number:
-    default_value: "0000"
+    default_value: '0000'
 
 main:
-  - key: selection_components
-    name: Selection components
-    description: Radio, dropdown, checklist, and boolean inputs
-    ui:
-      components:
-        - type: radio
-          key: radio_demo
-          label: Radio Button Group
-          required: true
-          trim: true
-          options:
-            - value: a
-              label: Option A
-            - value: b
-              label: Option B
-            - value: c
-              label: Option C
-        - type: dropdown
-          key: dropdown_demo
-          label: Single Dropdown
-          placeholder: Select one option
-          required: false
-          trim: true
-          options:
-            - value: opt1
-              label: First Option
-            - value: opt2
-              label: Second Option
-            - value: opt3
-              label: Third Option
-        - type: multidropdown
-          key: multidropdown_demo
-          label: Multi Dropdown
-          placeholder: Select multiple options
-          required: false
-          trim: true
-          options:
-            - value: multi1
-              label: Option 1
-            - value: multi2
-              label: Option 2
-            - value: multi3
-              label: Option 3
-        - type: checklist
-          key: checklist_demo
-          label: Checklist
-          required: false
-          trim: true
-          options:
-            - value: item1
-              label: Item 1
-            - value: item2
-              label: Item 2
-            - value: item3
-              label: Item 3
-        - type: switch
-          key: boolean_demo
-          label: Accept Terms
-          required: false
-          trim: true
-          options:
-            - value: "true"
-              label: I Accept
-            - value: "false"
-              label: I Decline
-  - key: basic_input_components
-    name: Basic Inputs
-    python: phases.basic_inputs:basic_inputs
-    description: Text, number, and textarea inputs
-    ui:
-      components:
-        - type: textarea
-          key: textarea_input
-          label: Multi-Line Text Area
-          placeholder: Enter multiple lines
-          required: false
-          trim: true
-        - type: text_input
-          key: text_input
-          label: " S/N de L'Unité"
-          required: false
-          trim: true
-          options: []
-        - type: number_input
-          key: number_input
-          label: Number Input
-          placeholder: Enter a number
-          required: true
-          trim: true
-          options: []
-  - key: slider_component
-    name: Slider components
-    python: phases.slider_input:slider_input
-    description: Slider input for numeric ranges
-    ui:
-      components:
-        - type: slider
-          key: slider_demo
-          label: Temperature Setting (°C)
-          placeholder: ""
-          required: false
-          trim: true
-          min: 0.0
-          max: 100.0
-          step: 5.0
-  - key: progress_monitoring
-    name: Progress Monitoring
-    python: phases.monitor_progress:monitor_progress
-    description: Auto-updating progress bar and output components
-    ui:
-      components:
-        - type: progress
-          key: progress
-          required: false
-          trim: true
-          options: []
-        - type: text
-          key: Status
-          required: false
-          default_value: ""
-          trim: true
-          options: []
-        - type: image
-          key: image
-          label: QR Code
-          required: false
-          trim: true
-          options: []
-          width: 200px
-          height: 200px
+- name: Selection components
+  description: Radio, dropdown, checklist, and boolean inputs
+  ui:
+    components:
+    - type: radio
+      key: radio_demo
+      label: Radio Button Group
+      required: true
+      trim: true
+      options:
+      - value: a
+        label: Option A
+      - value: b
+        label: Option B
+      - value: c
+        label: Option C
+    - type: dropdown
+      key: dropdown_demo
+      label: Single Dropdown
+      placeholder: Select one option
+      required: false
+      trim: true
+      options:
+      - value: opt1
+        label: First Option
+      - value: opt2
+        label: Second Option
+      - value: opt3
+        label: Third Option
+    - type: multidropdown
+      key: multidropdown_demo
+      label: Multi Dropdown
+      placeholder: Select multiple options
+      required: false
+      trim: true
+      options:
+      - value: multi1
+        label: Option 1
+      - value: multi2
+        label: Option 2
+      - value: multi3
+        label: Option 3
+    - type: checklist
+      key: checklist_demo
+      label: Checklist
+      required: false
+      trim: true
+      options:
+      - value: item1
+        label: Item 1
+      - value: item2
+        label: Item 2
+      - value: item3
+        label: Item 3
+    - type: switch
+      key: boolean_demo
+      label: Accept Terms
+      required: false
+      trim: true
+      options:
+      - value: 'true'
+        label: I Accept
+      - value: 'false'
+        label: I Decline
+  enabled: false
+- key: basic_input_components
+  name: Basic Inputs
+  python: phases.basic_inputs:basic_inputs
+  description: Text, number, and textarea inputs
+  ui:
+    components:
+    - type: textarea
+      key: textarea_input
+      label: Multi-Line Text Area
+      placeholder: Enter multiple lines
+      required: false
+      trim: true
+    - type: text_input
+      key: text_input
+      label: ' S/N de L''Unité'
+      required: false
+      trim: true
+      options: []
+    - type: number_input
+      key: number_input
+      label: Number Input
+      placeholder: Enter a number
+      required: true
+      trim: true
+      options: []
+  enabled: false
+- key: slider_component
+  name: Slider components
+  python: phases.slider_input:slider_input
+  description: Slider input for numeric ranges
+  ui:
+    components:
+    - type: slider
+      key: slider_demo
+      label: Temperature Setting (°C)
+      placeholder: ''
+      required: false
+      trim: true
+      min: 0.0
+      max: 100.0
+      step: 5.0
+  enabled: false
+- name: Progress Monitoring
+  python: phases.monitor_progress:monitor_progress
+  description: Auto-updating progress bar and output components
+  ui:
+    components:
+    - type: progress
+      key: progress
+      required: false
+      trim: true
+      options: []
+    - type: text
+      key: Status
+      required: false
+      default_value: ''
+      trim: true
+      options: []
+    - type: image
+      key: image
+      label: QR Code
+      required: false
+      trim: true
+      options: []
+      width: 200px
+      height: 200px

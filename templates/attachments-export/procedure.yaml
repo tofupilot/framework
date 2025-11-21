@@ -13,3 +13,6 @@ main:
 - name: attach_file_example
   python: phases.attach_file_example
   description: Demonstrates attaching files and data to test runs
+  enabled: false
+- key: phase_1
+  name: New Phase 1

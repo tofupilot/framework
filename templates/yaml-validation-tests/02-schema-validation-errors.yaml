@@ -1,0 +1,36 @@
+# Schema Validation Errors - Serde deserialization issues
+
+name: Schema Validation Test
+version: 1.0.0
+
+# Missing required field (name is required in phases)
+main:
+  - key: phase1
+    python: test1
+
+# Wrong type (string instead of array for slots)
+execution:
+  slots: "this_should_be_array"
+  strategy: "invalid_strategy_value"
+  workers: "not_a_number"
+
+# Wrong type (number instead of string for key)
+setup:
+  - key: 12345
+    name: "Phase"
+    python: test
+
+# Invalid nested structure (measurements should be array)
+teardown:
+  - key: phase1
+    name: "Phase"
+    python: test
+    measurements: "should_be_array"
+
+# Unknown field
+plugs:
+  - key: plug1
+    name: "Plug"
+    python: test
+    unknown_field_that_does_not_exist: value
+    another_invalid_field: 123
