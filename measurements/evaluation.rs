@@ -1,5 +1,5 @@
 use crate::measurements::types::{Measurement, MeasurementValue};
-use crate::schema::procedure::{
+use crate::procedure::schema::{
     AggregationValue, AxisSpec, MeasurementSpec, PhaseDefinition, ValidatorExpectedValue,
     ValidatorOutcome, ValidatorSpec,
 };
@@ -88,7 +88,7 @@ pub fn auto_evaluate_measurements(
             if obj.len() == 1 && obj.contains_key("MultiDimensional") {
                 if let Some(multidim_value) = obj.get("MultiDimensional") {
                     if let Ok(multidim_spec) = serde_json::from_value::<
-                        crate::schema::procedure::MultiDimensionalSpec,
+                        crate::procedure::schema::MultiDimensionalSpec,
                     >(multidim_value.clone())
                     {
                         measurement.value = MeasurementValue::MultiDimensional(multidim_spec);
@@ -140,9 +140,9 @@ pub fn check_all_measurements_pass(measurements: &[Measurement]) -> bool {
 
 fn check_measurement_pass(measurement: &Measurement) -> bool {
     if let Some(validators) = &measurement.validators {
-        let has_fail = validators.iter().any(|v| {
-            v.outcome == Some(ValidatorOutcome::Fail)
-        });
+        let has_fail = validators
+            .iter()
+            .any(|v| v.outcome == Some(ValidatorOutcome::Fail));
         if has_fail {
             return false;
         }
@@ -151,9 +151,9 @@ fn check_measurement_pass(measurement: &Measurement) -> bool {
     if let Some(aggregations) = &measurement.aggregations {
         for agg in aggregations {
             if let Some(validators) = &agg.validators {
-                let has_fail = validators.iter().any(|v| {
-                    v.outcome == Some(ValidatorOutcome::Fail)
-                });
+                let has_fail = validators
+                    .iter()
+                    .any(|v| v.outcome == Some(ValidatorOutcome::Fail));
                 if has_fail {
                     return false;
                 }
@@ -163,9 +163,9 @@ fn check_measurement_pass(measurement: &Measurement) -> bool {
 
     if let MeasurementValue::MultiDimensional(multidim) = &measurement.value {
         if let Some(validators) = &multidim.x_axis.validators {
-            let has_fail = validators.iter().any(|v| {
-                v.outcome == Some(ValidatorOutcome::Fail)
-            });
+            let has_fail = validators
+                .iter()
+                .any(|v| v.outcome == Some(ValidatorOutcome::Fail));
             if has_fail {
                 return false;
             }
@@ -173,9 +173,9 @@ fn check_measurement_pass(measurement: &Measurement) -> bool {
 
         for y_axis in &multidim.y_axis {
             if let Some(validators) = &y_axis.validators {
-                let has_fail = validators.iter().any(|v| {
-                    v.outcome == Some(ValidatorOutcome::Fail)
-                });
+                let has_fail = validators
+                    .iter()
+                    .any(|v| v.outcome == Some(ValidatorOutcome::Fail));
                 if has_fail {
                     return false;
                 }
@@ -184,9 +184,9 @@ fn check_measurement_pass(measurement: &Measurement) -> bool {
             if let Some(aggregations) = &y_axis.aggregations {
                 for agg in aggregations {
                     if let Some(validators) = &agg.validators {
-                        let has_fail = validators.iter().any(|v| {
-                            v.outcome == Some(ValidatorOutcome::Fail)
-                        });
+                        let has_fail = validators
+                            .iter()
+                            .any(|v| v.outcome == Some(ValidatorOutcome::Fail));
                         if has_fail {
                             return false;
                         }
@@ -212,9 +212,9 @@ fn merge_and_evaluate_validators(measurement: &mut Measurement, yaml_config: &Me
     if let Some(python_validators) = &measurement.validators {
         for py_val in python_validators {
             // Find matching YAML validator by operator
-            let matching_idx = all_validators.iter().position(|yaml_val| {
-                yaml_val.operator == py_val.operator
-            });
+            let matching_idx = all_validators
+                .iter()
+                .position(|yaml_val| yaml_val.operator == py_val.operator);
 
             if let Some(idx) = matching_idx {
                 if py_val.outcome.is_some() {
@@ -422,9 +422,9 @@ fn merge_and_evaluate_aggregations(measurement: &mut Measurement, yaml_config: &
                     let mut merged_validators = yaml_vals.clone();
                     for py_val in py_vals {
                         // Check if Python validator overrides YAML validator
-                        let override_idx = merged_validators.iter().position(|yaml_val| {
-                            yaml_val.operator == py_val.operator
-                        });
+                        let override_idx = merged_validators
+                            .iter()
+                            .position(|yaml_val| yaml_val.operator == py_val.operator);
 
                         if let Some(idx) = override_idx {
                             // Python validator matches YAML validator
@@ -584,9 +584,9 @@ fn determine_aggregation_outcome(validators: &Option<Vec<ValidatorSpec>>) -> Val
     match validators {
         Some(vals) if !vals.is_empty() => {
             // Check if any validator failed
-            let has_fail = vals.iter().any(|v| {
-                v.outcome == Some(ValidatorOutcome::Fail)
-            });
+            let has_fail = vals
+                .iter()
+                .any(|v| v.outcome == Some(ValidatorOutcome::Fail));
 
             if has_fail {
                 ValidatorOutcome::Fail
@@ -674,9 +674,9 @@ fn evaluate_axis(python_axis: &mut AxisSpec, yaml_axis: &AxisSpec) {
     // Merge Python validator outcomes with YAML validators
     if let Some(python_validators) = &python_axis.validators {
         for py_val in python_validators {
-            let matching_idx = all_validators.iter().position(|yaml_val| {
-                yaml_val.operator == py_val.operator
-            });
+            let matching_idx = all_validators
+                .iter()
+                .position(|yaml_val| yaml_val.operator == py_val.operator);
 
             if let Some(idx) = matching_idx {
                 if py_val.outcome.is_some() {
@@ -692,10 +692,10 @@ fn evaluate_axis(python_axis: &mut AxisSpec, yaml_axis: &AxisSpec) {
     // Convert axis data to JSON for validation (only if data exists)
     if let Some(data) = &python_axis.data {
         let axis_json_value = match data {
-            crate::schema::procedure::AxisData::Numeric(nums) => {
+            crate::procedure::schema::AxisData::Numeric(nums) => {
                 Value::Array(nums.iter().map(|n| Value::from(*n)).collect())
             }
-            crate::schema::procedure::AxisData::String(strs) => {
+            crate::procedure::schema::AxisData::String(strs) => {
                 Value::Array(strs.iter().map(|s| Value::String(s.clone())).collect())
             }
         };
@@ -746,9 +746,9 @@ fn evaluate_axis(python_axis: &mut AxisSpec, yaml_axis: &AxisSpec) {
                     // Both Python and YAML provide validators, merge them
                     let mut merged_validators = yaml_vals.clone();
                     for py_val in py_vals {
-                        let override_idx = merged_validators.iter().position(|yaml_val| {
-                            yaml_val.operator == py_val.operator
-                        });
+                        let override_idx = merged_validators
+                            .iter()
+                            .position(|yaml_val| yaml_val.operator == py_val.operator);
 
                         if let Some(idx) = override_idx {
                             // Python validator matches YAML validator

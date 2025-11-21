@@ -1,0 +1,13 @@
+def pattern_device_id(run):
+    log.info("Complex device identifier pattern validation")
+    log.info("Pattern: ^DEV-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$")
+    log.info("")
+    log.info("Valid examples:")
+    log.info("  ✓ DEV-AB12-CD34-EF56")
+    log.info("  ✓ DEV-1234-5678-90AB")
+    log.info("  ✓ DEV-AAAA-BBBB-CCCC")
+    log.info("")
+    log.info("Invalid examples:")
+    log.info("  ✗ DEV-ABCD (incomplete)")
+    log.info("  ✗ DEV-ab12-cd34-ef56 (lowercase letters)")
+    log.info("  ✗ DEV-ABC1-DEF2-GHI3 (only 3 chars per segment)")

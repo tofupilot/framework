@@ -10,6 +10,7 @@
 //! - [`instance`]: Plug instance definitions and state
 //! - [`plug_service`]: Python subprocess management for persistent plugs
 
+pub mod grpc;
 pub mod guard;
 pub mod instance;
 pub mod manager;

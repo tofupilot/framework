@@ -1,0 +1,206 @@
+name: IXrouter3 procedure
+version: 1.0.0
+description: Electrical and Functional testing
+
+execution:
+  workers: 8
+  on_first_failure: stop
+  slots:
+  - key: slot_a
+    name: SLOT_A
+
+unit:
+  serial_number:
+    default_value: '001122334455'
+  part_number:
+    default_value: IX01
+  revision_number:
+    default_value: 3.0.4
+  batch_number:
+    default_value: 2025-004
+
+setup:
+- key: setup_all
+  name: setup_all
+  python: phases.setup:all_setup
+  description: Initialize shared resources and connect to device
+
+main:
+- key: test_ain1
+  name: test_ain1
+  python: phases.checklist:test_ain1
+  description: Test Analog Input 1 functionality
+  measurements:
+  - key: mean_voltage
+    name: mean_voltage
+    unit: V
+    validators:
+    - operator: '>'
+      expected_value: 3.2
+    - operator: <
+      expected_value: 3.4
+  - key: std_dev
+    name: std_dev
+    validators:
+    - operator: <
+      expected_value: 0.2
+  - key: resolution
+    name: resolution
+    validators:
+    - operator: <
+      expected_value: 0.5
+- key: check_mac_address
+  name: check_mac_address
+  python: phases.checklist:check_mac_address
+  description: Read and validate Ethernet MAC address
+  measurements:
+  - key: mac_address
+    name: mac_address
+    validators:
+    - operator: matches
+      expected_value: ^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$
+  - key: oui
+    name: oui
+    validators:
+    - operator: matches
+      expected_value: AC:DE:48
+  - key: unicast
+    name: unicast
+    validators:
+    - operator: ==
+      expected_value: 0.0
+- key: check_wifi_mac
+  name: check_wifi_mac
+  python: phases.checklist:check_wifi_mac
+  description: Read and validate WiFi MAC address
+  measurements:
+  - key: mac_difference
+    name: mac_difference
+- key: check_imei
+  name: check_imei
+  python: phases.checklist:check_imei
+  description: Read and validate IMEI number
+  measurements:
+  - key: imei_number
+    name: imei_number
+    validators:
+    - operator: matches
+      expected_value: ^\d{15}$
+- key: phase_1
+  name: Manual Electrical tests
+  measurements:
+  - key: voltage
+    name: voltage
+    validators:
+    - operator: '>'
+      expected_value: 3.2
+    - operator: <=
+      expected_value: 3.5
+  - key: current
+    name: current
+    validators:
+    - operator: <
+      expected_value: 1.5
+  ui:
+    components:
+    - type: number_input
+      key: number_input
+      label: Current?
+      required: false
+      bind: measurements.current
+      trim: true
+    - type: slider
+      key: slider
+      label: Tension?
+      required: false
+      bind: measurements.voltage
+      trim: true
+      min: 3.0
+      max: 3.6
+      step: 0.1
+- key: phase_2
+  name: Manual Functional tests
+  measurements:
+  - key: is_led_switched
+    name: is_led_switched
+    validators:
+    - operator: Matches
+      expected_value: 'True'
+  ui:
+    components:
+    - type: switch
+      key: switch
+      label: Is the LED_3 on?
+      required: false
+      bind: measurements.is_led_switched
+      trim: true
+      options:
+      - value: 'true'
+        label: On
+      - value: 'false'
+        label: Off
+  enabled: false
+- key: phase_3
+  name: Test Power Rail
+  python: phases.electrical_tests:test_power_rails
+- key: phase_4
+  name: Current consumption
+  python: phases.electrical_tests:test_current_consumption
+  description: Measure current draw on all rails
+  measurements:
+  - key: current_3v3_idle
+    name: 3.3V Idle Current
+    unit: mA
+    validators:
+    - operator: '>'
+      expected_value: 40.0
+    - operator: <
+      expected_value: 60.0
+  - key: current_3v3_active
+    name: 3.3V Active Current
+    unit: mA
+    validators:
+    - operator: '>'
+      expected_value: 150.0
+    - operator: <
+      expected_value: 250.0
+  - key: current_5v_idle
+    name: 5V Idle Current
+    unit: mA
+    validators:
+    - operator: <
+      expected_value: 35.0
+  - key: current_5v_active
+    name: 5V Active Current
+    unit: mA
+    validators:
+    - operator: '>'
+      expected_value: 70.0
+    - operator: <
+      expected_value: 130.0
+  - key: current_12v_idle
+    name: 12V Idle Current
+    unit: mA
+    validators:
+    - operator: <
+      expected_value: 15.0
+  - key: current_12v_active
+    name: 12V Active Current
+    unit: mA
+    validators:
+    - operator: '>'
+      expected_value: 140.0
+    - operator: <
+      expected_value: 210.0
+  - key: power_idle
+    name: Total Idle Power
+    unit: mW
+    validators:
+    - operator: <
+      expected_value: 500.0
+  - key: power_active
+    name: Total Active Power
+    unit: mW
+    validators:
+    - operator: <
+      expected_value: 3000.0

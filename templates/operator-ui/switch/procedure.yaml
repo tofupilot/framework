@@ -1,0 +1,180 @@
+name: Switch Input
+version: 1.0.0
+description: Comprehensive demonstration of all switch input features and parameters
+execution:
+  model: phase_first
+  workers: 1
+  on_first_failure: continue
+main:
+  # ========================================
+  # DISPLAY FIELDS
+  # ========================================
+
+  - name: Display
+    description: Progressive demonstration of display field options
+    ui:
+      components:
+        # 1. No Label - minimal configuration
+        - key: no_label
+          type: switch
+
+        # 2. With Label
+        - key: with_label
+          type: switch
+          label: "Enable Feature"
+
+        # 3. With Description
+        - key: with_description
+          type: switch
+          label: "Power On"
+          description: "Toggle to enable power supply to the device"
+
+        # 4. With Default Value (True)
+        - key: default_true
+          type: switch
+          label: "Auto Start"
+          default_value: true
+          description: "Pre-set to enabled by default"
+
+        # 5. With Default Value (False)
+        - key: default_false
+          type: switch
+          label: "Debug Mode"
+          default_value: false
+          description: "Pre-set to disabled by default"
+
+  # ========================================
+  # CUSTOM LABELS
+  # ========================================
+
+  - name: Custom Labels
+    description: Customize the Yes/No labels with domain-specific options
+    ui:
+      components:
+        # 1. On/Off
+        - key: on_off
+          type: switch
+          label: "Power"
+          description: "Custom labels: On/Off"
+          options:
+            - label: "On"
+              value: "true"
+            - label: "Off"
+              value: "false"
+
+        # 2. Enabled/Disabled
+        - key: enabled_disabled
+          type: switch
+          label: "WiFi"
+          description: "Custom labels: Enabled/Disabled"
+          options:
+            - label: "Enabled"
+              value: "true"
+            - label: "Disabled"
+              value: "false"
+
+        # 3. Pass/Fail
+        - key: pass_fail
+          type: switch
+          label: "Visual Inspection"
+          description: "Custom labels: Pass/Fail"
+          options:
+            - label: "Pass"
+              value: "true"
+            - label: "Fail"
+              value: "false"
+
+        # 4. Active/Inactive
+        - key: active_inactive
+          type: switch
+          label: "Sensor Status"
+          description: "Custom labels: Active/Inactive"
+          options:
+            - label: "Active"
+              value: "true"
+            - label: "Inactive"
+              value: "false"
+
+  # ========================================
+  # VALIDATION
+  # ========================================
+
+  - name: Validation
+    description: Required field validation for switch inputs
+    ui:
+      components:
+        # 1. Optional Field
+        - key: optional_field
+          type: switch
+          label: "Optional Setting"
+          description: "Can be left unset, no validation errors"
+
+        # 2. Required Field
+        - key: required_field
+          type: switch
+          label: "Safety Confirmation"
+          description: "This field must be set before continuing"
+
+        # 3. Required with Custom Labels
+        - key: required_custom
+          type: switch
+          label: "Accept Terms"
+          description: "Required acceptance before proceeding"
+          options:
+            - label: "Accept"
+              value: "true"
+            - label: "Decline"
+              value: "false"
+
+  # ========================================
+  # DATA BINDING (With Python Runtime)
+  # ========================================
+
+  - name: Binding
+    description: Binds switch value to measurement
+    python: phases/bind_to_measurement
+    ui:
+      components:
+        - key: test_passed
+          type: switch
+          label: "Test Result"
+          description: "This value will be saved as a boolean measurement"
+          bind: test_passed
+          options:
+            - label: "Pass"
+              value: "true"
+            - label: "Fail"
+              value: "false"
+
+  # ========================================
+  # MULTIPLE INPUTS
+  # ========================================
+
+  - name: Multiple
+    description: Form with multiple switches
+    ui:
+      components:
+        - key: power_supply
+          type: switch
+          label: "Power Supply Connected"
+          description: "Verify 12V power supply is connected"
+
+        - key: usb_cable
+          type: switch
+          label: "USB Cable Connected"
+          description: "Verify USB-C cable is connected"
+
+        - key: led_indicator
+          type: switch
+          label: "LED Indicator Lit"
+          description: "Verify green LED is illuminated"
+
+        - key: fan_running
+          type: switch
+          label: "Cooling Fan Running"
+          description: "Verify fan is spinning"
+
+        - key: no_physical_damage
+          type: switch
+          label: "No Physical Damage"
+          description: "Verify no cracks, scratches, or damage"

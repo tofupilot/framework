@@ -1,0 +1,23 @@
+name: Python Module Demo
+version: 1.0.0
+description: Demonstrates Python module syntax and optional function field
+execution:
+  model: slot_first
+  workers: 1
+main:
+  - name: test_simple_module
+    description: "Simple module - function field omitted (defaults to 'simple')"
+    python:
+      module: phases.simple
+    # Function field omitted - defaults to last component of module path: "simple"
+
+  - name: test_nested_module
+    description: "Nested module - function field omitted (defaults to 'test_module')"
+    python:
+      module: phases.python.test_module
+    # Function field omitted - defaults to last component: "test_module"
+
+  - name: test_explicit_function
+    description: "Explicit function - function field specified when it differs from module"
+    python: phases.python.test_module:explicit_function
+    # Function field explicitly specified because function name differs from module name

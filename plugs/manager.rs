@@ -1,12 +1,13 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
-use tauri::Emitter;
+
+use tauri_specta::Event;
 use tokio::sync::{Mutex, RwLock};
 use uuid::Uuid;
 
 use crate::plugs::plug_service::PlugServiceManager;
-use crate::{PlugStatusUpdateEvent, PlugScope, PlugStage, PlugStatusValue};
+use crate::execution::events::{PlugScope, PlugStage, PlugStatusUpdateEvent, PlugStatusValue};
 
 fn emit_plug_status(
     app_handle: Option<&tauri::AppHandle>,
@@ -27,8 +28,8 @@ fn emit_plug_status(
             status,
         };
 
-        println!("PLUG [BACKEND] Emitting plug-status-update: {:?}", event);
-        let _ = app.emit("plug-status-update", event);
+        log::debug!("PLUG [BACKEND] Emitting plug-status-update: {:?}", event);
+        let _ = event.emit(app);
     }
 }
 
@@ -36,7 +37,7 @@ fn emit_plug_status(
 pub struct ResourceAllocation {
     pub job_id: Uuid,
     pub allocated_resources: HashMap<String, String>, // resource_type -> specific_instance
-    pub plug_ports: HashMap<String, u16>,             // plug_name -> port
+    pub plug_ports: HashMap<String, u16>,             // plug_key -> port
 }
 
 #[derive(Debug, Clone)]
@@ -51,10 +52,10 @@ pub struct ResourceManager {
     pools: Arc<RwLock<HashMap<String, ResourcePool>>>,
     allocations: Arc<RwLock<Vec<ResourceAllocation>>>,
     plug_service_manager: Arc<PlugServiceManager>,
-    // Track plug instances by name and optionally slot
-    plug_instances: Arc<RwLock<HashMap<String, PlugInstance>>>, // "plugname" or "plugname_slot1"
-    plug_scopes: Arc<RwLock<HashMap<String, PlugScope>>>, // plug_name -> scope
-    procedure_plugs_lock: Arc<Mutex<HashSet<String>>>, // Track all-slots plugs in use
+    // Track plug instances by key and optionally slot
+    plug_instances: Arc<RwLock<HashMap<String, PlugInstance>>>, // "plug_key" or "plug_key_slot1"
+    plug_scopes: Arc<RwLock<HashMap<String, PlugScope>>>,       // plug_key -> scope
+    procedure_plugs_lock: Arc<Mutex<HashSet<String>>>,          // Track all-slots plugs in use
     manual_plugs: Arc<RwLock<HashSet<String>>>, // Track manually-started plugs (debug mode)
 }
 
@@ -201,10 +202,7 @@ impl ResourceManager {
 
         // Start or reuse plug services based on scope
         for plug_name in plug_configs.keys() {
-            let scope = scopes
-                .get(plug_name)
-                .cloned()
-                .unwrap_or(PlugScope::Each);
+            let scope = scopes.get(plug_name).cloned().unwrap_or(PlugScope::Each);
 
             // Determine the instance key based on scope
             let instance_key = match scope {
@@ -218,7 +216,7 @@ impl ResourceManager {
                     }
                 }
                 PlugScope::All => {
-                    // For all-slots plugs, use just the plug name
+                    // For all-slots plugs, use just the plug key
                     plug_name.clone()
                 }
             };
@@ -227,10 +225,10 @@ impl ResourceManager {
             if let Some(instance) = instances.get_mut(&instance_key) {
                 instance.ref_count += 1;
                 plug_ports.insert(plug_name.clone(), instance.port);
-                crate::cli_output::debug(format!(
+                log::debug!(
                     "Phase using plug {} (ref_count: {})",
                     instance_key, instance.ref_count
-                ));
+                );
                 // No event needed - plug is already ready
             } else {
                 return Err(format!(
@@ -256,12 +254,8 @@ impl ResourceManager {
     }
 
     /// Stop plug services for a job with scope awareness
-    pub async fn stop_plug_services(
-        &self,
-        job_id: Uuid,
-    ) -> Result<(), String> {
-        self.stop_plug_services_for_slot(job_id, None)
-            .await
+    pub async fn stop_plug_services(&self, job_id: Uuid) -> Result<(), String> {
+        self.stop_plug_services_for_slot(job_id, None).await
     }
 
     /// Stop plug services for a job, handling scope properly
@@ -277,10 +271,7 @@ impl ResourceManager {
             let mut instances = self.plug_instances.write().await;
 
             for plug_name in allocation.plug_ports.keys() {
-                let scope = scopes
-                    .get(plug_name)
-                    .cloned()
-                    .unwrap_or(PlugScope::Each);
+                let scope = scopes.get(plug_name).cloned().unwrap_or(PlugScope::Each);
 
                 // Determine the instance key
                 let instance_key = match scope {
@@ -297,10 +288,10 @@ impl ResourceManager {
                 // Just decrement ref count - don't destroy plugs here
                 if let Some(instance) = instances.get_mut(&instance_key) {
                     instance.ref_count -= 1;
-                    crate::cli_output::debug(format!(
+                    log::debug!(
                         "Phase done using plug {} (ref_count: {})",
                         instance_key, instance.ref_count
-                    ));
+                    );
                     // Plug stays ready - will be destroyed at scope boundary
                 }
             }
@@ -312,27 +303,27 @@ impl ResourceManager {
     pub async fn create_procedure_plugs(
         &self,
         plug_configs: &HashMap<String, serde_json::Value>,
+        plug_display_names: &HashMap<String, String>,
         app_handle: Option<&tauri::AppHandle>,
     ) -> Result<(), String> {
         let scopes = self.plug_scopes.read().await;
         let mut instances = self.plug_instances.write().await;
 
         for (plug_name, plug_config) in plug_configs {
-            let scope = scopes
-                .get(plug_name)
-                .cloned()
-                .unwrap_or(PlugScope::Each);
+            let scope = scopes.get(plug_name).cloned().unwrap_or(PlugScope::Each);
 
             if matches!(scope, PlugScope::All) {
                 // Only create all-slots plugs here
                 let instance_key = plug_name.clone();
 
                 if !instances.contains_key(&instance_key) {
+                    let display_name = plug_display_names.get(plug_name).cloned().unwrap_or_else(|| plug_name.clone());
+
                     // Emit initializing event
                     emit_plug_status(
                         app_handle,
                         instance_key.clone(),
-                        plug_name.clone(),
+                        display_name.clone(),
                         scope.clone(),
                         None,
                         PlugStage::Setup,
@@ -342,7 +333,13 @@ impl ResourceManager {
                     // Start the plug service
                     let port = match self
                         .plug_service_manager
-                        .start_plug_service(instance_key.clone(), plug_name.clone(), plug_config.clone(), app_handle)
+                        .start_plug_service(
+                            instance_key.clone(),
+                            plug_name.clone(),
+                            display_name.clone(),
+                            plug_config.clone(),
+                            app_handle,
+                        )
                         .await
                     {
                         Ok(port) => port,
@@ -370,13 +367,7 @@ impl ResourceManager {
                         },
                     );
 
-                    crate::cli_output::print_section(
-                        crate::cli_output::Section::Plugs,
-                        format!(
-                            "Created all-slots plug {} on port {}",
-                            instance_key, port
-                        ),
-                    );
+                    log::info!("Created all-slots plug {} on port {}", instance_key, port);
 
                     // Emit ready event
                     emit_plug_status(
@@ -400,27 +391,27 @@ impl ResourceManager {
         &self,
         slot_id: String,
         plug_configs: &HashMap<String, serde_json::Value>,
+        plug_display_names: &HashMap<String, String>,
         app_handle: Option<&tauri::AppHandle>,
     ) -> Result<(), String> {
         let scopes = self.plug_scopes.read().await;
         let mut instances = self.plug_instances.write().await;
 
         for (plug_name, plug_config) in plug_configs {
-            let scope = scopes
-                .get(plug_name)
-                .cloned()
-                .unwrap_or(PlugScope::Each);
+            let scope = scopes.get(plug_name).cloned().unwrap_or(PlugScope::Each);
 
             if matches!(scope, PlugScope::Each) {
                 // Only create slot-level plugs here
                 let instance_key = format!("{}_{}", plug_name, slot_id);
 
                 if !instances.contains_key(&instance_key) {
+                    let display_name = plug_display_names.get(plug_name).cloned().unwrap_or_else(|| plug_name.clone());
+
                     // Emit initializing event
                     emit_plug_status(
                         app_handle,
                         instance_key.clone(),
-                        plug_name.clone(),
+                        display_name.clone(),
                         scope.clone(),
                         Some(slot_id.clone()),
                         PlugStage::Setup,
@@ -430,7 +421,13 @@ impl ResourceManager {
                     // Start the plug service
                     let port = match self
                         .plug_service_manager
-                        .start_plug_service(instance_key.clone(), plug_name.clone(), plug_config.clone(), app_handle)
+                        .start_plug_service(
+                            instance_key.clone(),
+                            plug_name.clone(),
+                            display_name.clone(),
+                            plug_config.clone(),
+                            app_handle,
+                        )
                         .await
                     {
                         Ok(port) => port,
@@ -458,10 +455,7 @@ impl ResourceManager {
                         },
                     );
 
-                    crate::cli_output::print_section(
-                        crate::cli_output::Section::Plugs,
-                        format!("Created slot-level plug {} on port {}", instance_key, port),
-                    );
+                    log::info!("Created slot-level plug {} on port {}", instance_key, port);
 
                     // Emit ready event
                     emit_plug_status(
@@ -488,10 +482,7 @@ impl ResourceManager {
         instances.keys().any(|key| {
             if key.ends_with(&format!("_{}", slot_id)) {
                 let plug_name = key.strip_suffix(&format!("_{}", slot_id)).unwrap_or(key);
-                let scope = scopes
-                    .get(plug_name)
-                    .cloned()
-                    .unwrap_or(PlugScope::Each);
+                let scope = scopes.get(plug_name).cloned().unwrap_or(PlugScope::Each);
                 matches!(scope, PlugScope::Each)
             } else {
                 false
@@ -524,10 +515,7 @@ impl ResourceManager {
             .filter(|key| {
                 if key.ends_with(&format!("_{}", slot_id)) {
                     let plug_name = key.strip_suffix(&format!("_{}", slot_id)).unwrap_or(key);
-                    let scope = scopes
-                        .get(plug_name)
-                        .cloned()
-                        .unwrap_or(PlugScope::Each);
+                    let scope = scopes.get(plug_name).cloned().unwrap_or(PlugScope::Each);
                     matches!(scope, PlugScope::Each)
                 } else {
                     false
@@ -538,8 +526,8 @@ impl ResourceManager {
 
         for instance_key in keys_to_remove {
             if let Some(_instance) = instances.remove(&instance_key) {
-                // Extract plug name by removing the "_slot_X" suffix
-                let plug_name = instance_key
+                // Extract plug key by removing the "_slot_X" suffix
+                let plug_key = instance_key
                     .strip_suffix(&format!("_{}", slot_id))
                     .unwrap_or(&instance_key);
 
@@ -547,7 +535,7 @@ impl ResourceManager {
                 emit_plug_status(
                     app_handle,
                     instance_key.clone(),
-                    plug_name.to_string(),
+                    plug_key.to_string(),
                     PlugScope::Each,
                     Some(slot_id.clone()),
                     PlugStage::Teardown,
@@ -560,22 +548,19 @@ impl ResourceManager {
                     .stop_plug_service(&instance_key)
                     .await
                 {
-                    crate::cli_output::warning(format!(
+                    log::warn!(
                         "Failed to stop plug service {}: {}",
                         instance_key, e
-                    ));
+                    );
                 }
 
-                crate::cli_output::print_section(
-                    crate::cli_output::Section::Plugs,
-                    format!("Destroyed slot-level plug {}", instance_key),
-                );
+                log::info!("Destroyed slot-level plug {}", instance_key);
 
                 // Emit inactive event
                 emit_plug_status(
                     app_handle,
                     instance_key.clone(),
-                    plug_name.to_string(),
+                    plug_key.to_string(),
                     PlugScope::Each,
                     Some(slot_id.clone()),
                     PlugStage::Teardown,
@@ -623,16 +608,13 @@ impl ResourceManager {
                     .stop_plug_service(&instance_key)
                     .await
                 {
-                    crate::cli_output::warning(format!(
+                    log::warn!(
                         "Failed to stop plug service {}: {}",
                         instance_key, e
-                    ));
+                    );
                 }
 
-                crate::cli_output::print_section(
-                    crate::cli_output::Section::Plugs,
-                    format!("Destroyed all-slots plug {}", instance_key),
-                );
+                log::info!("Destroyed all-slots plug {}", instance_key);
 
                 // Emit inactive event
                 emit_plug_status(
@@ -690,8 +672,16 @@ impl ResourceManager {
         );
 
         // Start the plug service using the same service manager
-        let port = self.plug_service_manager
-            .start_plug_service(plug_name.clone(), plug_name.clone(), plug_config, app_handle)
+        // For manual plugs, use the plug name as display name (user hasn't set a custom name)
+        let port = self
+            .plug_service_manager
+            .start_plug_service(
+                plug_name.clone(),
+                plug_name.clone(),
+                plug_name.clone(),
+                plug_config,
+                app_handle,
+            )
             .await?;
 
         // Track in the same instances map
@@ -700,17 +690,17 @@ impl ResourceManager {
             PlugInstance {
                 port,
                 slot_id: Some("manual".to_string()), // Mark as manual
-                ref_count: 0, // Manual plugs don't use ref counting
+                ref_count: 0,                        // Manual plugs don't use ref counting
             },
         );
 
         // Mark as manually started
         manual_plugs.insert(plug_name.clone());
 
-        crate::cli_output::debug(format!(
+        log::debug!(
             "Started manual plug '{}' on port {}",
             plug_name, port
-        ));
+        );
 
         // Emit ready event
         emit_plug_status(
@@ -761,10 +751,7 @@ impl ResourceManager {
                 .stop_plug_service(plug_name)
                 .await?;
 
-            crate::cli_output::debug(format!(
-                "Stopped manual plug '{}'",
-                plug_name
-            ));
+            log::debug!("Stopped manual plug '{}'", plug_name);
         }
 
         // Remove from manual tracking
@@ -795,10 +782,10 @@ impl ResourceManager {
         };
 
         for plug_name in manual_plugs {
-            crate::cli_output::warning(format!(
+            log::warn!(
                 "Cleaning up manually-started plug '{}' before procedure run",
                 plug_name
-            ));
+            );
             let _ = self.stop_manual_plug(&plug_name, app_handle).await;
         }
 
@@ -816,10 +803,7 @@ impl ResourceManager {
 
         let all_keys: Vec<String> = instances.keys().cloned().collect();
 
-        crate::cli_output::print_section(
-            crate::cli_output::Section::Plugs,
-            format!("Force destroying {} plug instances", all_keys.len()),
-        );
+        log::info!("Force destroying {} plug instances", all_keys.len());
 
         for instance_key in all_keys {
             if let Some(instance) = instances.remove(&instance_key) {
@@ -839,16 +823,13 @@ impl ResourceManager {
                     .force_kill_plug_service(&instance_key)
                     .await
                 {
-                    crate::cli_output::warning(format!(
+                    log::warn!(
                         "Failed to force kill plug service {}: {}",
                         instance_key, e
-                    ));
+                    );
                 }
 
-                crate::cli_output::print_section(
-                    crate::cli_output::Section::Plugs,
-                    format!("Force destroyed plug {}", instance_key),
-                );
+                log::info!("Force destroyed plug {}", instance_key);
 
                 emit_plug_status(
                     app_handle,

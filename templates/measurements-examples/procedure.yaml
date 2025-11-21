@@ -1,0 +1,8 @@
+name: Comprehensive Measurement Examples
+version: 1.0.0
+description: Complete implementation of all measurement examples from specification
+main:
+  - name: numeric_minimal
+    python: test_minimal_numeric
+    description: Basic voltage measurement with no optional fields
+    measurements:

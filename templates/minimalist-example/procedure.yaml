@@ -1,0 +1,21 @@
+name: Minimalist Example
+version: 1.0.0
+description: Level 1 - Minimalist syntax with flat phase list
+execution:
+  workers: 2
+
+main:
+  - key: initialize_test
+    name: Init
+    python: phases/initialize_test
+    description: Initialize the test environment
+
+  - key: run_measurement
+    name: Meas
+    python: phases/run_measurement
+    description: Perform the main measurement
+
+  - key: validate_results
+    name: Validate
+    python: test_phases.validate_results
+    description: Validate the measurement results (uses default function from module name)

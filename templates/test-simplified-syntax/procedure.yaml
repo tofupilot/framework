@@ -1,0 +1,55 @@
+name: Test Simplified Syntax
+version: 1.0.0
+description: Test de la nouvelle syntaxe simplifiée
+
+plugs:
+  - key: equipment_bench
+    name: Equipment Bench
+    scope: all
+    python: plugs.bench:BenchManager
+    description: Équipement partagé du banc
+  - key: unit_fixture
+    name: Unit Fixture
+    python: plugs.fixture:FixtureManager
+    description: Fixture par unité (scope each par défaut)
+
+setup:
+  - name: Calibrate Bench
+    scope: all
+    python: setup_bench:calibrate
+    description: Calibration globale du banc
+  - name: Initialize Unit
+    python: setup_unit:initialize
+    description: Initialisation par unité (scope each par défaut)
+
+main:
+  - name: Test Voltage
+    python: test_voltage:test_voltage
+    description: Test de voltage
+    measurements:
+      - name: voltage
+        unit: V
+        validators:
+          - level: critical
+            operator: '>='
+            expected_value: 3.0
+
+  - name: Test Current
+    python: test_current:test_current
+    description: Test de courant
+    measurements:
+      - name: current
+        unit: A
+        validators:
+          - level: critical
+            operator: '>='
+            expected_value: 0.5
+
+teardown:
+  - name: Cleanup Unit
+    python: teardown_unit:cleanup
+    description: Nettoyage par unité (scope each par défaut)
+  - name: Shutdown Bench
+    scope: all
+    python: teardown_bench:shutdown
+    description: Arrêt global du banc

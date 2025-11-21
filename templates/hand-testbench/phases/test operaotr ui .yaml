@@ -1,0 +1,56 @@
+id: 989b6f36-c3c0-11f0-a320-e75310e6e6ae
+name: New Procedure22
+version: 1.0.1
+description: A new test procedure2
+
+execution:
+  strategy: slot_first
+  workers: 8
+  on_first_failure: stop
+  slots:
+  - key: slot_a
+    name: SLOT_A
+
+unit:
+  serial_number:
+    default_value: werewr
+    placeholder: This is a phase where
+    min_length: 12
+    max_length: 23
+
+main:
+- name: New Phase
+  ui:
+    components:
+    - type: switch
+      key: switch
+      label: Wearer
+      description: werwerwerwer
+      required: true
+      bind: unit.serial_number
+      trim: true
+      options:
+      - value: 'true'
+        label: Werwerwer
+      - value: 'false'
+        label: werwer
+    - type: text_input
+      key: text_input
+      required: false
+      bind: unit.serial_number
+      trim: true
+      options: []
+    - type: text_input
+      key: text_input_acy
+      required: false
+      trim: true
+      options: []
+    - type: switch
+      key: switch_edw
+      required: false
+      trim: true
+      options:
+      - value: 'true'
+        label: Wer
+      - value: 'false'
+        label: Wr

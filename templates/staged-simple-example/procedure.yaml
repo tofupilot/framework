@@ -1,0 +1,29 @@
+name: Staged Simple Example
+version: 1.0.0
+description: Level 2 - Staged simple syntax with setup, main, and teardown
+execution:
+  model: slot_first
+  workers: 2
+setup:
+- name: prepare_environment
+  python: phases/prepare_environment
+  description: Prepare the test environment for each unit
+- name: load_configuration
+  python: phases/load_configuration
+  description: Load test configuration
+main:
+- name: run_test_a
+  python: phases/run_test_a
+  description: Execute test scenario A
+- name: run_test_b
+  python: phases/run_test_b
+  enabled: false
+  description: Execute test scenario B
+teardown:
+- name: save_results
+  python: phases/save_results
+  description: Save test results
+- name: cleanup_environment
+  python: phases/cleanup_environment
+  description: Clean up the test environment
+

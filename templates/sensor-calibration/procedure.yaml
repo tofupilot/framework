@@ -1,0 +1,42 @@
+name: Sensor Calibration Example
+version: 1.0.0
+description: Example demonstrating 2 plugs used across 2 phases for sensor calibration
+execution:
+  model: slot_first
+  workers: 2
+
+unit:
+  serial_number:
+    default_value: TEMP-SN-00000
+  part_number:
+    default_value: PT100-SENSOR
+
+plugs:
+  - key: data_logger
+    name: Data Logger
+    scope: all
+    description: Shared data logger for recording calibration results
+    python: plugs.python.instruments:DataLogger
+  - key: temperature_sensor
+    name: Temperature Sensor
+    description: PT100 temperature sensor for measuring calibration points
+    python: plugs.python.instruments:TemperatureSensor
+
+setup:
+  - name: setup_all
+    scope: all
+    python: phases/setup_all
+    description: Initialize all-slots resources
+  - name: setup_each
+    python: phases/setup_each
+    description: Initialize each-slot resources
+
+main:
+  - name: calibrate_sensor
+    python: phases/calibrate_sensor
+    description: Calibrate the temperature sensor using reference points
+
+  - name: validate_calibration
+    python: phases/validate_calibration
+    description: Validate sensor calibration by comparing readings
+

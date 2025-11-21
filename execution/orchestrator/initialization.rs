@@ -9,14 +9,13 @@
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
-use crate::execution::cli_output;
 use crate::execution::constants::limits;
+use crate::execution::events::PlugScope;
 use crate::execution::job::Job;
-use crate::execution::runs::RunManager;
-use crate::schema::procedure::ProcedureDefinition;
-use crate::PlugScope;
+use crate::execution::reports::ReportManager;
 
-use super::{job_helpers, ExecutionStrategy, Orchestrator};
+use super::jobs;
+use super::orchestrator::{ExecutionStrategy, Orchestrator};
 
 impl Orchestrator {
     pub async fn initialize(&mut self) -> Result<(), String> {
@@ -33,12 +32,9 @@ impl Orchestrator {
     pub async fn initialize_report_managers(
         &mut self,
         procedure_path: &std::path::Path,
-        execution_id: &str,
-        procedure_def: &ProcedureDefinition,
         slots: &[String],
     ) -> Result<(), String> {
         // Store the execution ID
-        self.execution_id = Some(execution_id.to_string());
 
         let mut report_managers = self.report_managers.write().await;
         report_managers.clear();
@@ -49,21 +45,17 @@ impl Orchestrator {
             // Generate unique run ID for this slot
             let slot_run_id = uuid::Uuid::new_v4().to_string();
 
-            let mut report_manager = RunManager::new(procedure_path)?;
+            let mut report_manager = ReportManager::new(procedure_path)?;
 
-            // Start run with slot-specific directory - this will include both slot and shared phases
-            report_manager.start_run_with_slot(
+            report_manager.start_report(
                 &slot_run_id,
-                execution_id,
-                slot_id,
-                procedure_def,
+                &self.execution_id,
+                Some(slot_id),
+                &self.procedure_definition,
                 self.initial_unit_info.clone(),
             )?;
 
             // Store the run_id if this is the first slot
-            if self.run_id.is_none() {
-                self.run_id = Some(slot_run_id.clone());
-            }
 
             report_managers.insert(slot_id.clone(), report_manager);
         }
@@ -73,31 +65,29 @@ impl Orchestrator {
 
     pub async fn submit_procedure(
         &mut self,
-        procedure: &ProcedureDefinition,
         slots: Vec<String>,
         execution_strategy: ExecutionStrategy,
-        initial_unit_info: crate::UnitInfo,
+        initial_unit_info: crate::execution::types::UnitInfo,
     ) -> Result<(), String> {
         // Store procedure definition
-        self.procedure_definition = Some(procedure.clone());
 
         // Store initial unit info FIRST before anything else uses it
-        crate::execution::cli_output::verbose(format!(
+        log::trace!(
             "📋 submit_procedure: initial_unit_info = serial:{:?}, part:{:?}",
             initial_unit_info.serial_number, initial_unit_info.part_number
-        ));
+        );
         self.initial_unit_info = Some(initial_unit_info.clone());
 
         // Extract plug scopes and pass to ResourceManager
         {
             let mut scopes = HashMap::new();
-            for plug_def in &procedure.plugs {
-                let scope = if plug_def.scope == Some(crate::schema::procedure::Scope::All) {
+            for plug_def in &self.procedure_definition.plugs {
+                let scope = if plug_def.scope == Some(crate::procedure::schema::Scope::All) {
                     PlugScope::All
                 } else {
                     PlugScope::Each
                 };
-                scopes.insert(plug_def.get_key(), scope);
+                scopes.insert(plug_def.key.clone(), scope);
             }
             let resource_manager = self.resource_manager.write().await;
             resource_manager.set_plug_scopes(scopes).await;
@@ -108,20 +98,18 @@ impl Orchestrator {
         let mut state = self.state.write().await;
 
         // Set should_stop_on_first_failure flag from procedure configuration
-        state.should_stop_on_first_failure = matches!(
-            procedure.on_first_failure,
-            crate::schema::procedure::FirstFailureAction::Stop
-        );
+        state.should_stop_on_first_failure = self.procedure_definition
+            .execution
+            .as_ref()
+            .map(|e| matches!(e.on_first_failure, crate::procedure::schema::FirstFailureAction::Stop))
+            .unwrap_or(true);
         if state.should_stop_on_first_failure {
-            cli_output::print_section(
-                cli_output::Section::Config,
-                "on_first_failure is set to STOP - test will stop on first phase failure",
-            );
+            log::info!("on_first_failure is set to STOP - test will stop on first phase failure");
         }
 
         // Initialize display based on CLI mode preferences
         {
-            let _total_phases = procedure
+            let _total_phases = self.procedure_definition
                 .get_all_phases_with_stage_scope()
                 .into_iter()
                 .filter(|(_, phase)| !phase.should_skip())
@@ -129,7 +117,7 @@ impl Orchestrator {
         }
 
         // Check queue size limit using total phase count
-        let total_phases = procedure.total_phase_count();
+        let total_phases = self.procedure_definition.total_phase_count();
         if state.job_queue.len() + (slots.len() * total_phases) > limits::MAX_JOB_QUEUE_SIZE {
             return Err(format!(
                 "Job queue size limit exceeded ({})",
@@ -155,7 +143,7 @@ impl Orchestrator {
         // First pass: create all jobs for all stage/scope combinations and store their IDs for dependency resolution
 
         // Cache the phase list to avoid re-iteration
-        let all_phases_with_stage = procedure.get_all_phases_with_stage_scope();
+        let all_phases_with_stage = self.procedure_definition.get_all_phases_with_stage_scope();
 
         // Create all-slots phases once (shared across all slots)
         for &(stage_scope, phase) in all_phases_with_stage.iter() {
@@ -172,18 +160,18 @@ impl Orchestrator {
                     // (will be updated in second pass after we create each-slot teardown jobs)
 
                     // Create all-slots phases with no slot (shared)
-                    let job = job_helpers::create_job_for_phase(
+                    let job = jobs::create_job_for_phase(
                         phase,
                         None, // No slot = shared across all slots
                         stage_scope,
                         dependencies,
                         &global_job_map,
                         &self.procedure_dir,
-                        procedure,
+                        &self.procedure_definition,
                     );
 
                     // Store mapping for dependency resolution (use key for matching)
-                    let key = format!("SHARED:{}", phase.get_key());
+                    let key = format!("SHARED:{}", phase.key);
                     global_job_map.insert(key, job.id);
 
                     // Track setup_procedure jobs
@@ -209,14 +197,14 @@ impl Orchestrator {
                 match stage_scope {
                     StageScope::SetupEach | StageScope::Main | StageScope::TeardownEach => {
                         // Create slot-specific phases (implicit dependencies added later)
-                        let mut job = job_helpers::create_job_for_phase(
+                        let mut job = jobs::create_job_for_phase(
                             phase,
                             Some(slot_id.clone()),
                             stage_scope,
                             phase.depends_on.clone(),
                             &global_job_map,
                             &self.procedure_dir,
-                            procedure,
+                            &self.procedure_definition,
                         );
 
                         // Add implicit dependencies based on stage/scope
@@ -243,7 +231,7 @@ impl Orchestrator {
                         }
 
                         // Store mapping for dependency resolution (use key for matching)
-                        let key = format!("{}:{}", slot_id, phase.get_key());
+                        let key = format!("{}:{}", slot_id, phase.key);
                         global_job_map.insert(key, job.id);
 
                         // Track jobs by type for dependency management
@@ -313,15 +301,12 @@ impl Orchestrator {
         }
 
         // Third pass: enqueue jobs in proper execution order based on stage/scope combinations
-        use crate::schema::procedure::StageScope;
+        use crate::procedure::schema::StageScope;
 
         match execution_strategy {
             ExecutionStrategy::SlotFirst => {
                 // Slot-first: complete all phases for each slot before moving to next
-                cli_output::print_section(
-                    cli_output::Section::Config,
-                    "Using SLOT-FIRST execution model",
-                );
+                log::info!("Using SLOT-FIRST execution model");
 
                 // Setup procedure phases (run once for all slots)
                 for job in &all_jobs {
@@ -338,17 +323,17 @@ impl Orchestrator {
                     let mut current_slot_jobs = Vec::new();
 
                     // Collect all jobs for this slot in execution order
-                    current_slot_jobs.extend(job_helpers::filter_jobs_by_slot_and_type(
+                    current_slot_jobs.extend(jobs::filter_jobs_by_slot_and_type(
                         &all_jobs,
                         slot_id,
                         StageScope::SetupEach,
                     ));
-                    current_slot_jobs.extend(job_helpers::filter_jobs_by_slot_and_type(
+                    current_slot_jobs.extend(jobs::filter_jobs_by_slot_and_type(
                         &all_jobs,
                         slot_id,
                         StageScope::Main,
                     ));
-                    current_slot_jobs.extend(job_helpers::filter_jobs_by_slot_and_type(
+                    current_slot_jobs.extend(jobs::filter_jobs_by_slot_and_type(
                         &all_jobs,
                         slot_id,
                         StageScope::TeardownEach,
@@ -362,7 +347,7 @@ impl Orchestrator {
                 // Store slot jobs for deferred execution
                 // Only the first slot's jobs are enqueued initially
                 if let Some((first_slot_id, first_slot_jobs)) = slot_jobs.first() {
-                    cli_output::verbose(format!("📦 Starting with slot: {}", first_slot_id));
+                    log::trace!("📦 Starting with slot: {}", first_slot_id);
                     for job in first_slot_jobs {
                         state.enqueue_job(job.clone());
                     }
@@ -371,12 +356,9 @@ impl Orchestrator {
                 // Store remaining slots for later
                 if slot_jobs.len() > 1 {
                     state.pending_slot_jobs = slot_jobs.into_iter().skip(1).collect();
-                    cli_output::print_section(
-                        cli_output::Section::Config,
-                        format!(
-                            "{} slots queued for sequential processing",
-                            state.pending_slot_jobs.len()
-                        ),
+                    log::info!(
+                        "{} slots queued for sequential processing",
+                        state.pending_slot_jobs.len()
                     );
                 }
 
@@ -391,37 +373,37 @@ impl Orchestrator {
             }
             ExecutionStrategy::PhaseFirst => {
                 // Phase-first: run same phase across all slots before moving to next phase
-                job_helpers::enqueue_jobs_by_stage_scope(
+                jobs::enqueue_jobs_by_stage_scope(
                     &mut state,
-                    procedure,
+                    &self.procedure_definition,
                     &all_jobs,
                     StageScope::SetupAll,
                     true,
                 );
-                job_helpers::enqueue_jobs_by_stage_scope(
+                jobs::enqueue_jobs_by_stage_scope(
                     &mut state,
-                    procedure,
+                    &self.procedure_definition,
                     &all_jobs,
                     StageScope::SetupEach,
                     false,
                 );
-                job_helpers::enqueue_jobs_by_stage_scope(
+                jobs::enqueue_jobs_by_stage_scope(
                     &mut state,
-                    procedure,
+                    &self.procedure_definition,
                     &all_jobs,
                     StageScope::Main,
                     false,
                 );
-                job_helpers::enqueue_jobs_by_stage_scope(
+                jobs::enqueue_jobs_by_stage_scope(
                     &mut state,
-                    procedure,
+                    &self.procedure_definition,
                     &all_jobs,
                     StageScope::TeardownEach,
                     false,
                 );
-                job_helpers::enqueue_jobs_by_stage_scope(
+                jobs::enqueue_jobs_by_stage_scope(
                     &mut state,
-                    procedure,
+                    &self.procedure_definition,
                     &all_jobs,
                     StageScope::TeardownAll,
                     true,
@@ -431,10 +413,10 @@ impl Orchestrator {
 
         // Add plug scope operations to total job count for progress tracking
         // Each plug has 2 scope operations: init + delete
-        let (procedure_plugs, slot_plugs): (Vec<_>, Vec<_>) = procedure
+        let (procedure_plugs, slot_plugs): (Vec<_>, Vec<_>) = self.procedure_definition
             .plugs
             .iter()
-            .partition(|p| p.scope == Some(crate::schema::procedure::Scope::All));
+            .partition(|p| p.scope == Some(crate::procedure::schema::Scope::All));
 
         let procedure_plug_count = procedure_plugs.len();
         let slot_plug_count = slot_plugs.len();
@@ -443,7 +425,7 @@ impl Orchestrator {
         state.total_jobs_submitted += plug_scope_operations;
 
         // Emit execution plan to frontend
-        self.emit_execution_plan(procedure, &state, &slots).await;
+        self.emit_execution_plan(&self.procedure_definition, &state, &slots).await;
 
         Ok(())
     }

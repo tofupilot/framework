@@ -41,7 +41,7 @@ impl Drop for ResourceGuard {
             tokio::spawn(async move {
                 let manager = resource_manager.write().await;
                 let _ = manager.release_resources(job_id).await;
-                crate::cli_output::debug(format!("Resources released for job {} via Drop", job_id));
+                log::debug!("Resources released for job {} via Drop", job_id);
             });
         }
     }

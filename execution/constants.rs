@@ -25,8 +25,3 @@ pub mod scheduling {
     /// Delay between scheduling attempts when no work is available (milliseconds)
     pub const IDLE_POLL_DELAY_MS: u64 = 10;
 }
-
-pub mod ipc {
-    /// Maximum message size for IPC communication (bytes)
-    pub const MAX_MESSAGE_SIZE: usize = 65536;
-}

@@ -1,0 +1,32 @@
+id: test-phase-api
+name: Test Phase API
+version: 1.0.0
+description: Test the new phase.fail() API
+
+execution:
+  strategy: slot_first
+  workers: 1
+  slots:
+  - key: slot_a
+    name: Slot A
+
+main:
+- name: Test phase.fail() with message
+  python:
+    module: phases.test_fail
+    function: test_fail_with_message
+
+- name: Test phase.skip() with message
+  python:
+    module: phases.test_skip
+    function: test_skip_with_message
+
+- name: Test implicit pass (no return)
+  python:
+    module: phases.test_pass
+    function: test_implicit_pass
+
+- name: Test old API should fail (accessing phase.FAIL without calling)
+  python:
+    module: phases.test_old_api
+    function: test_old_api_broken

@@ -1,0 +1,13 @@
+def pattern_serial_number(run):
+    log.info("Serial number pattern validation")
+    log.info("Pattern: ^SN-[0-9]{8}$")
+    log.info("This enforces format: SN- followed by exactly 8 digits")
+    log.info("")
+    log.info("Valid examples:")
+    log.info("  ✓ SN-12345678")
+    log.info("  ✓ SN-98765432")
+    log.info("")
+    log.info("Invalid examples:")
+    log.info("  ✗ SN-123 (too short)")
+    log.info("  ✗ SN-ABC12345 (contains letters)")
+    log.info("  ✗ 12345678 (missing SN- prefix)")

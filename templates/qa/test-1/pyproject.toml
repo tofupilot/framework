@@ -1,0 +1,5 @@
+[project]
+name = "test-1-add-remove-python-script"
+version = "1.0.0"
+requires-python = ">=3.9"
+dependencies = ["numpy"]

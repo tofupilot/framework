@@ -1,19 +1,15 @@
-//! Event emission functions for UI communication
-//!
-//! This module handles all event emissions to the Tauri frontend,
-//! including job progress, cancellations, and system events.
+//! Event emission for UI communication
 
-use crate::execution::job::Job;
-use crate::execution::job::JobStatus;
-use crate::execution::job::Outcome;
+use tauri::AppHandle;
+use tauri_specta::Event;
+
+use crate::execution::job::{Job, JobStatus, Outcome};
 use crate::execution::state::OrchestratorState;
-use crate::schema::procedure::ProcedureDefinition;
-use tauri::{AppHandle, Emitter};
+use crate::procedure::schema::ProcedureDefinition;
 
-use super::{ExecutionPlan, JobProgress, Orchestrator, PlannedPhase, PlannedPlug};
+use super::orchestrator::{ExecutionPlan, JobProgress, Orchestrator, PlannedPhase, PlannedPlug};
 
 impl Orchestrator {
-    /// Unified job progress emission - eliminates all duplicate JobProgress creation
     pub(super) fn emit_job_progress(
         &self,
         app: &AppHandle,
@@ -38,7 +34,7 @@ impl Orchestrator {
             retry_count: original_job.retry_count,
             error,
         };
-        let _ = app.emit("job-progress", &progress);
+        let _ = super::orchestrator::JobProgressEvent(progress).emit(app);
     }
 
     pub(super) async fn emit_cancelled_jobs(
@@ -90,8 +86,8 @@ impl Orchestrator {
                 continue;
             }
             phases.push(PlannedPhase {
-                phase_key: phase.get_key(),
-                phase_name: phase.get_display_name(),
+                phase_key: phase.key.clone(),
+                phase_name: phase.name.clone(),
                 stage_scope,
             });
         }
@@ -99,13 +95,13 @@ impl Orchestrator {
         let (plugs_all, plugs_each): (Vec<_>, Vec<_>) = procedure
             .plugs
             .iter()
-            .partition(|p| p.scope == Some(crate::schema::procedure::Scope::All));
+            .partition(|p| p.scope == Some(crate::procedure::schema::Scope::All));
 
         let plugs_all: Vec<PlannedPlug> = plugs_all
             .into_iter()
             .map(|p| PlannedPlug {
-                plug_key: p.get_key(),
-                plug_name: p.get_display_name(),
+                plug_key: p.key.clone(),
+                plug_name: p.name.clone(),
                 scope: "all".to_string(),
             })
             .collect();
@@ -113,8 +109,8 @@ impl Orchestrator {
         let plugs_each: Vec<PlannedPlug> = plugs_each
             .into_iter()
             .map(|p| PlannedPlug {
-                plug_key: p.get_key(),
-                plug_name: p.get_display_name(),
+                plug_key: p.key.clone(),
+                plug_name: p.name.clone(),
                 scope: "each".to_string(),
             })
             .collect();
@@ -124,9 +120,9 @@ impl Orchestrator {
             plugs_all,
             plugs_each,
             slots: slots.to_vec(),
-            total_expected_jobs: state.total_jobs_submitted,
+            total_expected_jobs: state.total_jobs_submitted as u32,
         };
 
-        let _ = app.emit("execution-plan", &plan);
+        let _ = super::orchestrator::ExecutionPlanEvent(plan).emit(app);
     }
 }

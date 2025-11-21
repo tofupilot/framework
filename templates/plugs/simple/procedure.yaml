@@ -1,0 +1,28 @@
+name: Simple Each-Slot Plug Demo
+version: 1.0.0
+description: Minimal example demonstrating each-slot plug lifecycle
+execution:
+  model: slot_first
+  workers: 2
+plugs:
+  - key: counter
+    name: Counter
+    description: Simple counter that persists state across phases
+    python: plugs.python.counter:SimpleCounter
+
+setup:
+  - name: Setup Each
+    description: Initialize each-slot plugs
+    python:
+      module: setup_each
+
+main:
+  - name: Count Steps
+    description: Increment the counter multiple times
+    python:
+      module: count_steps
+
+  - name: Verify Counter State
+    description: Verify that counter state persisted from previous phase
+    python:
+      module: verify_count

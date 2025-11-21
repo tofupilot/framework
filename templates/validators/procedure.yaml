@@ -1,0 +1,224 @@
+name: Validator Display Test Suite
+version: 1.0.0
+description: Comprehensive test suite for validator display functionality
+
+execution:
+  workers: 1
+  on_first_failure: continue
+
+unit:
+  serial_number:
+    default_value: SN-00000
+  part_number:
+    default_value: PN-00000
+
+setup:
+  - key: initialize
+    name: Initialize Test Suite
+    description: Setup phase to prepare for validator testing
+
+main:
+  - key: multiple_lower_bounds
+    name: Multiple Lower Bounds
+    description: "Test Case 1: Multiple > validators"
+    python: phases.test_validators:test_multiple_lower_bounds
+    measurements:
+      - key: temperature
+        name: temperature
+        unit: "°C"
+        validators:
+          - outcome: UNSET
+            operator: ">"
+            expected_value: 0
+          - outcome: UNSET
+            operator: ">"
+            expected_value: 10
+          - outcome: UNSET
+            operator: ">"
+            expected_value: 20
+
+  - key: multiple_upper_bounds
+    name: Multiple Upper Bounds
+    description: "Test Case 2: Multiple < validators"
+    python: phases.test_validators:test_multiple_upper_bounds
+    measurements:
+      - key: pressure
+        name: pressure
+        unit: kPa
+        validators:
+          - outcome: UNSET
+            operator: "<"
+            expected_value: 100
+          - outcome: UNSET
+            operator: "<"
+            expected_value: 80
+          - outcome: UNSET
+            operator: "<"
+            expected_value: 60
+
+  - key: range_with_extra
+    name: Range with Extra Constraint
+    description: "Test Case 3: Range validators plus inequality validator"
+    python: phases.test_validators:test_range_with_extra
+    measurements:
+      - key: voltage
+        name: voltage
+        unit: V
+        validators:
+          - outcome: UNSET
+            operator: ">"
+            expected_value: 3.0
+          - outcome: UNSET
+            operator: "<"
+            expected_value: 5.0
+          - outcome: UNSET
+            operator: "!="
+            expected_value: 4.2
+
+  - key: numeric_equality
+    name: Numeric Equality
+    description: "Test Case 4: Numeric == operator (previously unsupported)"
+    python: phases.test_validators:test_numeric_equality
+    measurements:
+      - key: exact_count
+        name: exact_count
+        validators:
+          - outcome: UNSET
+            operator: "=="
+            expected_value: 42
+
+  - key: numeric_inequality
+    name: Numeric Inequality
+    description: "Test Case 5: Numeric != operator (previously unsupported)"
+    python: phases.test_validators:test_numeric_inequality
+    measurements:
+      - key: error_code
+        name: error_code
+        validators:
+          - outcome: UNSET
+            operator: "!="
+            expected_value: 0
+
+  - key: string_equality
+    name: String Equality
+    description: "Test Case 6: String == operator (previously unsupported)"
+    python: phases.test_validators:test_string_equality
+    measurements:
+      - key: status
+        name: status
+        validators:
+          - outcome: UNSET
+            operator: "=="
+            expected_value: "PASS"
+
+  - key: string_inequality
+    name: String Inequality
+    description: "Test Case 7: String != operator (previously unsupported)"
+    python: phases.test_validators:test_string_inequality
+    measurements:
+      - key: error_message
+        name: error_message
+        validators:
+          - outcome: UNSET
+            operator: "!="
+            expected_value: "FAILED"
+
+  - key: string_pattern
+    name: String Pattern Matching
+    description: "Test Case 8: String matches operator (supported)"
+    python: phases.test_validators:test_string_pattern
+    measurements:
+      - key: serial_number
+        name: serial_number
+        validators:
+          - outcome: UNSET
+            operator: matches
+            expected_value: "^SN-[0-9]{6}$"
+
+  - key: string_contains
+    name: String Contains
+    description: "Test Case 9: String contains operator (previously unsupported)"
+    python: phases.test_validators:test_string_contains
+    measurements:
+      - key: log_message
+        name: log_message
+        validators:
+          - outcome: UNSET
+            operator: contains
+            expected_value: success
+
+  - key: boolean_equality
+    name: Boolean Equality
+    description: "Test Case 10: Boolean == operator"
+    python: phases.test_validators:test_boolean_equality
+    measurements:
+      - key: system_ready
+        name: system_ready
+        validators:
+          - outcome: UNSET
+            operator: "=="
+            expected_value: true
+
+  - key: boolean_inequality
+    name: Boolean Inequality
+    description: "Test Case 11: Boolean != operator (previously unsupported)"
+    python: phases.test_validators:test_boolean_inequality
+    measurements:
+      - key: has_error
+        name: has_error
+        validators:
+          - outcome: UNSET
+            operator: "!="
+            expected_value: true
+
+  - key: expression_validator
+    name: Expression Validator
+    description: "Test Case 12: Expression-based validator (previously hidden)"
+    python: phases.test_validators:test_expression_validator
+    measurements:
+      - key: outlier_detection
+        name: outlier_detection
+        unit: units
+        validators:
+          - outcome: UNSET
+            expression: "abs(value - mean) < 2 * stddev"
+
+  - key: mixed_validators
+    name: Mixed Validators
+    description: "Test Case 13: Combining standard operators and expressions"
+    python: phases.test_validators:test_mixed_validators
+    measurements:
+      - key: sensor_reading
+        name: sensor_reading
+        unit: units
+        validators:
+          - outcome: UNSET
+            operator: ">"
+            expected_value: 0
+          - outcome: UNSET
+            operator: "<"
+            expected_value: 100
+          - outcome: UNSET
+            expression: "value > previous_value * 0.9"
+
+  - key: complex_range
+    name: Complex Range
+    description: "Test Case 14: Multiple overlapping range validators"
+    python: phases.test_validators:test_complex_range
+    measurements:
+      - key: complex_measurement
+        name: complex_measurement
+        unit: units
+        validators:
+          - outcome: UNSET
+            operator: ">="
+            expected_value: 10
+          - outcome: UNSET
+            operator: ">"
+            expected_value: 15
+          - outcome: UNSET
+            operator: "<="
+            expected_value: 90
+          - outcome: UNSET
+            operator: "<"
+            expected_value: 85

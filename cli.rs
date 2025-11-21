@@ -1,81 +1,130 @@
+use crate::execution::orchestrator::orchestrator::Orchestrator;
+use crate::execution::types::UnitInfo;
 use std::env;
 use std::path::PathBuf;
 
-pub fn parse_cli_args() -> (PathBuf, Option<String>) {
+pub fn parse_args() -> (PathBuf, Option<String>) {
     let args: Vec<String> = env::args().collect();
 
     if args.len() < 3 {
-        print_usage(&args[0]);
+        print_help(&args[0]);
         std::process::exit(1);
     }
 
-    let procedure_dir = PathBuf::from(&args[2]);
-    if !procedure_dir.exists() {
-        eprintln!(
-            "Error: Directory does not exist: {}",
-            procedure_dir.display()
-        );
-        std::process::exit(1);
-    }
+    let dir = PathBuf::from(&args[2]);
+    let file = args.get(3).map(|s| s.to_string());
 
-    let mut procedure_file = None;
-
-    let mut i = 3;
-    while i < args.len() {
-        let arg = &args[i];
-        if arg.starts_with("--") {
-            eprintln!("Error: Unknown parameter: {}", arg);
-            print_usage(&args[0]);
-            std::process::exit(1);
-        } else if procedure_file.is_none() {
-            procedure_file = Some(arg.to_string());
-        } else {
-            eprintln!("Error: Unexpected argument: {}", arg);
-            print_usage(&args[0]);
-            std::process::exit(1);
-        }
-        i += 1;
-    }
-
-    (procedure_dir, procedure_file)
+    (dir, file)
 }
 
 pub fn print_help(program_name: &str) {
-    let cpu_count = num_cpus::get();
-
     println!("TofuPilot");
     println!("\nUsage:");
-    println!("  {} [OPTIONS]", program_name);
-    println!("\nOptions:");
-    println!("  --cli, -c <dir> [file]  Run procedure from directory in CLI mode");
-    println!("  --help, -h              Show this help message");
-    println!("\nExecution Configuration:");
-    println!("  All execution parameters (slots, workers, model) are configured in the YAML file:");
-    println!();
-    println!("  execution:");
-    println!("    model: slot_first          # or phase_first");
-    println!("    workers: {}                 # default: CPU cores", cpu_count);
-    println!("    slots:");
-    println!("      - id: SLOT_A");
-    println!("        name: Socket A");
-    println!("      - id: SLOT_B");
-    println!("        name: Socket B");
-    println!("\nExecution Models:");
-    println!("  phase_first             Run same phase across all slots (efficient batching)");
-    println!("  slot_first              Complete each slot before next (slot-focused testing)");
-    println!("\nWorker Guidelines:");
-    println!("  CPU-heavy tests:        {} workers (= CPU cores)", cpu_count);
-    println!("  I/O-heavy tests:        {} workers (2x CPU cores)", cpu_count * 2);
-    println!("  Memory-limited:         {} workers", (cpu_count / 2).max(1));
-    println!("\nExamples:");
-    println!("  {} --cli demo/my-test.yaml", program_name);
-    println!("  {} --cli ./procedure.yaml", program_name);
+    println!("  {}                      Launch GUI application", program_name);
+    println!("  {} --cli <dir> <file>   Run procedure in CLI mode", program_name);
+    println!("  {} --help               Show this help message", program_name);
 }
 
-fn print_usage(program_name: &str) {
-    eprintln!("Usage: {} --cli <yaml_file>", program_name);
-    eprintln!("\nExamples:");
-    eprintln!("  {} --cli demo/my-test.yaml", program_name);
-    eprintln!("  {} --cli ./procedure.yaml", program_name);
-    eprintln!("\nRun '{} --help' for more information.", program_name);
+pub fn run(procedure_dir: PathBuf, procedure_file: Option<String>) {
+    let runtime = match tokio::runtime::Runtime::new() {
+        Ok(rt) => rt,
+        Err(e) => {
+            log::error!("Failed to create runtime: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    runtime.block_on(async {
+        let procedure_def = if let Some(ref file) = procedure_file {
+            let full_path = procedure_dir.join(file);
+            match crate::procedure::load_procedure_definition(&full_path) {
+                Ok(def) => def,
+                Err(e) => {
+                    log::error!("Failed to load procedure: {}", e);
+                    return;
+                }
+            }
+        } else {
+            log::error!("No procedure file specified");
+            return;
+        };
+
+        let worker_count = procedure_def.execution.as_ref().map(|e| e.workers).unwrap_or_else(num_cpus::get);
+        let execution_id = uuid::Uuid::new_v4().to_string();
+        let run_id = uuid::Uuid::new_v4().to_string();
+        let mut orchestrator = Orchestrator::new(
+            worker_count,
+            procedure_dir.clone(),
+            execution_id.clone(),
+            run_id,
+            procedure_def.clone(),
+        );
+
+        if let Err(e) = orchestrator.initialize().await {
+            log::error!("Failed to initialize workers: {}", e);
+            return;
+        }
+
+        let slots: Vec<String> = if let Some(execution) = &procedure_def.execution {
+            if execution.slots.is_empty() {
+                vec!["SLOT_1".to_string()]
+            } else {
+                execution.slots.iter().map(|s| s.key.clone()).collect()
+            }
+        } else {
+            vec!["SLOT_1".to_string()]
+        };
+
+        for slot in &slots {
+            if slot.trim().is_empty() {
+                log::error!("Slot names cannot be empty");
+                return;
+            }
+        }
+
+        if let Some(file) = procedure_file {
+            let full_path = procedure_dir.join(file);
+            let _ = orchestrator
+                .initialize_report_managers(&full_path, &slots)
+                .await;
+        }
+
+        log::info!("Workers: {} | Slots: {}", worker_count, slots.len());
+
+        let empty_unit_info = UnitInfo {
+            serial_number: None,
+            part_number: None,
+            revision_number: None,
+            batch_number: None,
+            sub_units: None,
+            status: "active".to_string(),
+        };
+
+        let strategy = procedure_def.execution.as_ref().map(|e| e.strategy).unwrap_or(crate::procedure::schema::ExecutionStrategy::PhaseFirst);
+        if let Err(e) = orchestrator
+            .submit_procedure(slots, strategy, empty_unit_info)
+            .await
+        {
+            log::error!("Failed to submit procedure: {}", e);
+            return;
+        }
+
+        let exit_code = match orchestrator.execute_all(None).await {
+            Ok(stats) => {
+                let passed = stats.completed_jobs - stats.failed_jobs;
+                let status = if stats.failed_jobs == 0 { "PASSED" } else { "FAILED" };
+
+                log::info!("Result: {} ({} passed, {} failed)", status, passed, stats.failed_jobs);
+
+                if stats.failed_jobs == 0 { 0 } else { 1 }
+            }
+            Err(e) => {
+                log::error!("Execution failed: {}", e);
+                1
+            }
+        };
+
+        let _ = orchestrator.shutdown(None).await;
+        std::process::exit(exit_code);
+    });
 }

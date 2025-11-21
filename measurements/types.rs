@@ -1,22 +1,21 @@
-use crate::schema::procedure::{AggregationSpec, MultiDimensionalSpec, ValidatorSpec};
+use crate::procedure::schema::{AggregationSpec, MultiDimensionalSpec, ValidatorSpec};
 use serde::{Deserialize, Serialize};
-use ts_rs::TS;
+use specta::Type;
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
-#[serde(untagged)]
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub enum MeasurementValue {
     Null,
     Boolean(bool),
     Numeric(f64),
     String(String),
+    #[specta(skip)]
     Array(Vec<serde_json::Value>),
     MultiDimensional(MultiDimensionalSpec),
+    #[specta(skip)]
     Object(serde_json::Map<String, serde_json::Value>),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct Measurement {
     pub name: String,
     pub value: MeasurementValue,

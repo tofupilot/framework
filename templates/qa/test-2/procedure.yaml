@@ -1,0 +1,124 @@
+name: 'Test-2: Mixed '
+version: 1.0.1
+description: Electrical & Functional Tests
+
+execution:
+  workers: 3
+  on_first_failure: continue
+  slots:
+  - key: slot_a
+    name: SLOT_A
+
+unit:
+  serial_number:
+    default_value: SN-12345
+    min_length: 8
+    max_length: 8
+  part_number:
+    default_value: PCB01
+  revision_number:
+    default_value: A
+  batch_number:
+    default_value: 25-001
+
+setup:
+- key: phase_3
+  name: Get Ope name
+  ui:
+    components:
+    - type: switch
+      key: switch
+      label: Present?
+      options: []
+  enabled: false
+
+main:
+- key: phase_2
+  name: Get Temperature (opeUI)
+  measurements:
+  - key: temperature
+    name: temperature
+    unit: C
+    validators:
+    - outcome: UNSET
+      operator: =
+      expected_value: 25.9
+  - key: outside_temperature
+    name: outside_temperature
+    unit: C
+    validators:
+    - outcome: UNSET
+      operator: <
+      expected_value: 30.0
+    - outcome: UNSET
+      operator: '>'
+      expected_value: 10.0
+  - key: relative_temperature
+    name: relative_temperature
+    unit: degree
+    validators:
+    - outcome: UNSET
+      operator: '>='
+      expected_value: 12.0
+  - key: Sensor_check
+    name: String_input
+    unit: String
+    validators:
+    - outcome: UNSET
+      operator: In
+      expected_value: '[ON, OFF]'
+  ui:
+    components:
+    - type: dropdown
+      key: dropdown
+      options: []
+    - type: number_input
+      key: number_input
+      label: Ouside temperature?
+      bind: measurements.outside_temperature
+      options: []
+      default_value: '24'
+  enabled: false
+- key: phase_1
+  name: Electrical tests (python)
+  python: phases.phases:get_input_voltage
+  measurements:
+  - key: voltage
+    name: voltage
+    unit: V
+    validators:
+    - outcome: UNSET
+      operator: '>='
+      expected_value: 3.0
+  enabled: false
+- key: phase_6
+  name: Get measure from Ope
+  measurements:
+  - key: number_led
+    name: number_led
+    unit: '-'
+    validators:
+    - outcome: UNSET
+      operator: =
+      expected_value: 3.5
+  ui:
+    components:
+    - type: number_input
+      key: number_input
+      label: How many led are On?
+      placeholder: '3'
+      bind: measurements.number_led
+      options: []
+- key: phase_9
+  name: New Phase 9
+- key: phase_5
+  name: New Phase 5
+- key: phase_7
+  name: New Phase 7
+- key: phase_8
+  name: New Phase 8
+
+teardown:
+- key: phase_4
+  name: New Phase 4
+  enabled: false

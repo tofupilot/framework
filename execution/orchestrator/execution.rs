@@ -7,15 +7,16 @@
 //! - Timeout handling and worker recovery
 
 use std::collections::HashMap;
-use tauri::{AppHandle, Emitter};
+use tauri::AppHandle;
+use tauri_specta::Event;
 
 use crate::execution::constants::timeouts;
 use crate::execution::job::{Job, JobStatus};
 use crate::execution::worker::Worker;
 use crate::plugs::guard::ResourceManagerExt;
 
-use super::Orchestrator;
-use super::{JobCompletionEvent, JobProgress};
+use super::orchestrator::Orchestrator;
+use super::orchestrator::{JobCompletionEvent, JobProgress};
 
 impl Orchestrator {
     pub(super) async fn spawn_job_execution(
@@ -29,12 +30,12 @@ impl Orchestrator {
         // Track phase in display systems
         {
             let state = self.state.read().await;
-            let mut phase_slots = Vec::new();
+            let mut phase_slots: Vec<String> = Vec::new();
 
             // Check already tracked jobs for this phase
-            for (_phase_key, phase_name, slot_id) in state.job_info.values() {
-                if phase_name == &job.phase_name {
-                    let slot = slot_id.clone().unwrap_or_else(|| "<shared>".to_string());
+            for info in state.job_info.values() {
+                if info.phase_key == job.phase_key {
+                    let slot = info.slot_id.clone().unwrap_or_else(|| "<shared>".to_string());
                     if !phase_slots.contains(&slot) {
                         phase_slots.push(slot);
                     }
@@ -43,7 +44,7 @@ impl Orchestrator {
 
             // Check queued jobs for this phase
             for queued_job in &state.job_queue {
-                if queued_job.phase_name == job.phase_name {
+                if queued_job.phase_key == job.phase_key {
                     let slot = queued_job
                         .slot_id
                         .clone()
@@ -60,7 +61,7 @@ impl Orchestrator {
                 .clone()
                 .unwrap_or_else(|| "<shared>".to_string());
             if !phase_slots.contains(&current_slot) {
-                phase_slots.push(current_slot.clone());
+                phase_slots.push(current_slot);
             }
         }
 
@@ -81,9 +82,14 @@ impl Orchestrator {
         // Store job info when starting (needed for shutdown event emission)
         {
             let mut state = self.state.write().await;
-            state
-                .job_info
-                .insert(job.id, (job.phase_key.clone(), job.phase_name.clone(), job.slot_id.clone()));
+            state.job_info.insert(
+                job.id,
+                crate::execution::state::JobInfo {
+                    phase_key: job.phase_key.clone(),
+                    phase_name: job.phase_name.clone(),
+                    slot_id: job.slot_id.clone(),
+                },
+            );
         }
 
         // Emit job started event
@@ -102,7 +108,7 @@ impl Orchestrator {
                 retry_count: job.retry_count,
                 error: None,
             };
-            let _ = app.emit("job-progress", &progress);
+            let _ = super::orchestrator::JobProgressEvent(progress).emit(app);
         }
 
         // Clone what we need before spawning
@@ -119,11 +125,7 @@ impl Orchestrator {
         let plug_configs_for_job = self.get_plug_configs_for_job(&original_job);
 
         // Get all plug configs for potential slot creation
-        let _all_plug_configs = if let Some(procedure_def) = &self.procedure_definition {
-            self.get_all_plug_configs(procedure_def)
-        } else {
-            HashMap::new()
-        };
+        let _all_plug_configs = self.get_all_plug_configs(&self.procedure_definition);
 
         // Spawn task to execute job
         tokio::spawn(async move {
@@ -131,9 +133,7 @@ impl Orchestrator {
             {
                 let workers_check = workers.read().await;
                 if workers_check.is_empty() {
-                    crate::cli_output::debug(
-                        "Skipping job execution - orchestrator already shut down",
-                    );
+                    log::debug!("Skipping job execution - orchestrator already shut down");
                     return;
                 }
             }
@@ -144,12 +144,12 @@ impl Orchestrator {
                     Some(ms) => format!("timeout: {}ms", ms),
                     None => "no timeout".to_string(),
                 };
-                crate::cli_output::debug(format!(
+                log::debug!(
                     "Starting phase '{}' for {} ({})",
                     original_job.phase_name,
                     original_job.slot_id.as_deref().unwrap_or("<shared>"),
                     timeout_msg
-                ));
+                );
             }
 
             // Spawn a warning task only if timeout is set
@@ -169,13 +169,13 @@ impl Orchestrator {
                     }
                     drop(workers_check);
 
-                    crate::cli_output::warning(format!(
+                    log::warn!(
                         "Phase '{}' for {} has been running for {}ms, will timeout in {}ms",
                         phase_name_clone,
                         slot_id_clone.as_deref().unwrap_or("<shared>"),
                         warning_time_ms,
                         timeout_ms - warning_time_ms
-                    ));
+                    );
                 }))
             } else {
                 None
@@ -217,7 +217,7 @@ impl Orchestrator {
                 {
                     Ok(allocation) => allocation,
                     Err(e) => {
-                        crate::cli_output::warning(format!("Failed to allocate resources: {}", e));
+                        log::warn!("Failed to allocate resources: {}", e);
                         return;
                     }
                 };
@@ -232,17 +232,17 @@ impl Orchestrator {
                     .await
                 {
                     Ok(ports) => {
-                        crate::cli_output::debug(format!(
+                        log::debug!(
                             "Started plug services for job {}: {:?}",
                             original_job.id, ports
-                        ));
+                        );
 
                         // Ready events now emitted at plug level in ResourceManager
 
                         ports
                     }
                     Err(e) => {
-                        crate::cli_output::warning(format!("Failed to start plug services: {}", e));
+                        log::warn!("Failed to start plug services: {}", e);
                         HashMap::new()
                     }
                 }
@@ -280,51 +280,47 @@ impl Orchestrator {
                         {
                             let workers_check = workers.read().await;
                             if workers_check.is_empty() {
-                                crate::cli_output::debug(
-                                    "Skipping timeout handling - orchestrator already shut down",
-                                );
+                                log::debug!("Skipping timeout handling - orchestrator already shut down");
                                 return;
                             }
                         }
 
-                        crate::cli_output::print_section(
-                            crate::cli_output::Section::Phase,
-                            format!(
-                                "Phase '{}' for {} timed out after {}ms - killing worker",
-                                original_job.phase_name,
-                                original_job.slot_id.as_deref().unwrap_or("<shared>"),
-                                timeout_ms
-                            ),
+                        log::info!(
+                            "Phase '{}' for {} timed out after {}ms - killing worker",
+                            original_job.phase_name,
+                            original_job.slot_id.as_deref().unwrap_or("<shared>"),
+                            timeout_ms
                         );
 
                         // Kill the worker process - it's stuck in the phase execution
                         // We need to kill it because it won't see the interrupt while executing
                         let mut worker_mut = worker;
                         if let Err(kill_error) = worker_mut.shutdown_with_timeout(500).await {
-                            crate::cli_output::warning(format!(
+                            log::warn!(
                                 "Failed to kill worker after timeout: {}",
                                 kill_error
-                            ));
+                            );
                         }
 
                         // Check if orchestrator is still active before creating replacement worker
                         {
                             let workers_check = workers.read().await;
                             let state_check = state.read().await;
-                            if workers_check.is_empty() || worker_id >= workers_check.len() || state_check.shutdown_requested {
-                                crate::cli_output::debug(format!(
-                                    "Skipping worker replacement after timeout - orchestrator shutting down or already shut down"
-                                ));
+                            if workers_check.is_empty()
+                                || worker_id >= workers_check.len()
+                                || state_check.shutdown_requested
+                            {
+                                log::debug!("Skipping worker replacement after timeout - orchestrator shutting down or already shut down");
                                 return;
                             }
                         }
 
                         let mut new_worker = Worker::new(worker_id, procedure_dir.clone());
                         if let Err(start_error) = new_worker.start(app_handle.as_ref()).await {
-                            crate::cli_output::debug(format!(
+                            log::debug!(
                                 "Failed to start replacement worker {}: {}",
                                 worker_id, start_error
-                            ));
+                            );
                         }
 
                         // Replace the dead worker with a fresh one
@@ -333,20 +329,17 @@ impl Orchestrator {
                             if worker_id < workers_mut.len() {
                                 workers_mut[worker_id] = new_worker;
                             } else {
-                                crate::cli_output::debug(format!(
+                                log::debug!(
                                     "Cannot replace worker {} - orchestrator already shut down (workers.len() = {})",
                                     worker_id, workers_mut.len()
-                                ));
+                                );
                                 return;
                             }
                         }
 
-                        crate::cli_output::print_section(
-                            crate::cli_output::Section::Worker,
-                            format!(
-                                "Created and started new worker {} to replace timed-out worker",
-                                worker_id
-                            ),
+                        log::info!(
+                            "Created and started new worker {} to replace timed-out worker",
+                            worker_id
                         );
 
                         // Return a timeout error that will be properly handled in handle_job_completion
@@ -374,18 +367,21 @@ impl Orchestrator {
                     {
                         let workers_check = workers.read().await;
                         let state_check = state.read().await;
-                        if workers_check.is_empty() || worker_id >= workers_check.len() || state_check.shutdown_requested {
-                            crate::cli_output::debug(format!(
+                        if workers_check.is_empty()
+                            || worker_id >= workers_check.len()
+                            || state_check.shutdown_requested
+                        {
+                            log::debug!(
                                 "Skipping worker replacement for crashed worker {} - orchestrator shutting down or already shut down",
                                 worker_id
-                            ));
+                            );
                         } else {
                             drop(workers_check);
 
-                            crate::cli_output::warning(format!(
+                            log::warn!(
                                 "Worker {} crashed with IPC error, replacing...",
                                 worker_id
-                            ));
+                            );
 
                             // Get the worker from the array to take ownership
                             let mut crashed_worker = {
@@ -408,28 +404,25 @@ impl Orchestrator {
                             let start_result = new_worker.start(app_handle.as_ref()).await;
 
                             if let Err(start_error) = start_result {
-                                crate::cli_output::debug(format!(
+                                log::debug!(
                                     "Failed to start replacement worker {}: {}",
                                     worker_id, start_error
-                                ));
+                                );
                             } else {
                                 // Replace the worker in the shared state
                                 let mut workers_mut = workers.write().await;
                                 if worker_id < workers_mut.len() {
                                     workers_mut[worker_id] = new_worker;
                                 } else {
-                                    crate::cli_output::debug(format!(
+                                    log::debug!(
                                         "Cannot replace worker {} - orchestrator already shut down (workers.len() = {})",
                                         worker_id, workers_mut.len()
-                                    ));
+                                    );
                                 }
 
-                                crate::cli_output::print_section(
-                                    crate::cli_output::Section::Worker,
-                                    format!(
-                                        "Created and started new worker {} to replace crashed worker",
-                                        worker_id
-                                    ),
+                                log::info!(
+                                    "Created and started new worker {} to replace crashed worker",
+                                    worker_id
                                 );
                             }
                         }
@@ -455,10 +448,10 @@ impl Orchestrator {
                     .stop_plug_services_for_slot(original_job.id, original_job.slot_id.clone())
                     .await
                 {
-                    crate::cli_output::warning(format!(
+                    log::warn!(
                         "Failed to stop plug services for job {}: {}",
                         original_job.id, e
-                    ));
+                    );
                 }
 
                 // Events now emitted at plug level in ResourceManager

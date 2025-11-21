@@ -1,0 +1,13 @@
+def pattern_email(run):
+    log.info("Email address pattern validation")
+    log.info("Pattern: ^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$")
+    log.info("")
+    log.info("Valid examples:")
+    log.info("  ✓ user@example.com")
+    log.info("  ✓ john.doe@company.co.uk")
+    log.info("  ✓ test+tag@domain.com")
+    log.info("")
+    log.info("Invalid examples:")
+    log.info("  ✗ user@ (no domain)")
+    log.info("  ✗ @example.com (no username)")
+    log.info("  ✗ user (no @ symbol)")

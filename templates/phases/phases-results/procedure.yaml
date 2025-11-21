@@ -1,0 +1,74 @@
+name: Phase Results Test
+version: 1.0.0
+description: Tests basic phase return values and their default outcomes
+execution:
+  model: slot_first
+  workers: 2
+  on_first_failure: continue
+main:
+- name: Return None
+  description: Return None → Continue (default)
+  python:
+    module: return_none
+- name: Return True
+  description: Return True → Pass
+  python:
+    module: return_true
+- name: No return (pass)
+  description: No return statement (pass) → Continue (default)
+  python:
+    module: return_pass
+- name: Return Continue
+  description: Return "Continue" → Continue
+  python:
+    module: return_continue
+- name: Return PhaseResult.CONTINUE
+  description: Return PhaseResult.CONTINUE → Continue
+  python:
+    module: return_phase_result_continue
+- name: Return False
+  description: Return False → Fail
+  python:
+    module: return_false
+- name: Return Fail
+  description: Return "Fail" → Fail
+  python:
+    module: return_fail
+- name: Return PhaseResult.FAIL
+  description: Return PhaseResult.FAIL → Fail
+  python:
+    module: return_phase_result_fail
+- name: Return Skip
+  description: Return "Skip" → Skip
+  python:
+    module: return_skip
+- name: Return PhaseResult.SKIP
+  description: Return PhaseResult.SKIP → Skip
+  python:
+    module: return_phase_result_skip
+- name: Return Retry
+  description: Return "Retry" → Retry (retries 2 times then Pass)
+  python:
+    module: return_retry
+- name: Return PhaseResult.RETRY
+  description: Return PhaseResult.RETRY → Retry (retries 2 times then Continue)
+  python:
+    module: return_phase_result_retry
+- name: Return Stop
+  description: Return "Stop" → Stop (halts procedure execution)
+  python:
+    module: return_stop
+  then:
+    fail: continue
+- name: Executed after first STOP
+  description: Executes because then.fail.continue overrides STOP default behavior
+  python:
+    module: return_none
+- name: Return PhaseResult.STOP
+  description: Return PhaseResult.STOP → Stop (halts procedure execution)
+  python:
+    module: return_phase_result_stop
+- name: Never executed after second STOP
+  description: This phase should be skipped due to STOP
+  python:
+    module: return_none

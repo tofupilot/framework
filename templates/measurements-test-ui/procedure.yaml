@@ -1,0 +1,197 @@
+name: measurements_test_ui
+version: 1.0.0
+description: Measurement UI interactions
+main:
+  - name: set_unit_info_from_python
+    python: phases/set_unit_from_python
+    description: Minimalist Python phase that sets unit info with random values
+  - name: python_with_bound_ui
+    python: phases/python_bound_ui
+    enabled: false
+    description: Python phase with UI components bound to measurements
+    measurements:
+      - name: humidity
+        description: Humidity percentage measured from python
+        unit: "%"
+      - name: temperature
+        description: Temperature reading from operator
+        unit: °C
+        validators:
+          - expected_value: 15
+            level: critical
+            operator: ">="
+          - expected_value: 30
+            level: critical
+            operator: <=
+    ui:
+      components:
+        - bind: measurement.temperature
+          key: temperature
+          label: Temperature (°C)
+          multiple: false
+          placeholder: "20.0"
+          required: false
+          type: number_input
+  - name: native_with_bound_ui
+    python: "":""
+    enabled: false
+    description: Native phase with operator UI and bound measurements
+    runtime: native
+    measurements:
+      - name: voltage
+        description: Native only measurement
+        unit: V
+    ui:
+      components:
+        - bind: measurement.voltage
+          key: ui_voltage
+          label: Voltage
+          multiple: false
+          placeholder: ""
+          required: false
+          type: number_input
+  - name: binding_with_native_unit
+    python: "":""
+    description: native bind of serial number
+    runtime: native
+    ui:
+      components:
+        - bind: unit.serial_number
+          key: serialNumber
+          label: Serial Number
+          multiple: false
+          placeholder: ""
+          type: text_input
+        - bind: unit.batch_number
+          key: Batch Number
+          label: Batch Number
+          multiple: false
+          placeholder: ""
+          type: text_input
+        - bind: unit.revision_number
+          key: Revision Number
+          label: Revision Number
+          multiple: false
+          placeholder: ""
+          type: text_input
+  - name: test_every_component_is_bindable
+    python: "":""
+    description: Check that every component is bindable
+    runtime: native
+    measurements:
+      - name: test_boolean
+        description: Test boolean component is bindable
+      - name: test_checklist
+        description: Test checklist component is bindable
+      - name: test_dropdown
+        description: Test dropdown component is bindable
+      - name: test_multidropdown
+        description: Test multidropdown component is bindable
+      - name: test_number
+        description: Test number component is bindable
+      - name: test_radio
+        description: Test radio component is bindable
+      - name: test_slider
+        description: Test slider component is bindable
+      - name: test_text
+        description: Test text component is bindable
+      - name: test_textarea
+        description: Test textarea component is bindable
+    ui:
+      components:
+        - bind: measurements.test_text
+          key: test_text
+          label: Text component
+          multiple: false
+          placeholder: ""
+          required: false
+          type: text_input
+        - bind: measurements.test_number
+          key: test_number
+          label: number component
+          multiple: false
+          placeholder: ""
+          required: false
+          type: number_input
+        - bind: measurements.test_textarea
+          key: test_textarea
+          label: textarea component
+          multiple: false
+          placeholder: ""
+          required: false
+          type: textarea
+        - bind: measurements.test_boolean
+          key: test_boolean
+          label: boolean component
+          multiple: false
+          placeholder: ""
+          required: false
+          type: switch
+        - bind: measurements.test_radio
+          key: test_radio
+          label: radio component
+          multiple: false
+          options:
+            - label: Radio 1
+              value: radio1
+            - label: Radio 2
+              value: radio2
+            - label: Radio 3
+              value: radio3
+          placeholder: ""
+          required: false
+          type: radio
+        - bind: measurements.test_slider
+          key: test_slider
+          label: slider component
+          max: 10
+          min: -10
+          multiple: false
+          placeholder: ""
+          required: false
+          step: 0.5
+          type: slider
+        - bind: measurements.test_checklist
+          key: test_checklist
+          label: checklist component
+          multiple: false
+          options:
+            - label: Checklist 1
+              value: checklist1
+            - label: Checklist 2
+              value: checklist2
+            - label: Checklist 3
+              value: checklist3
+          placeholder: ""
+          required: false
+          type: checklist
+        - bind: measurements.test_dropdown
+          key: test_dropdown
+          label: dropdown component
+          multiple: false
+          options:
+            - label: Dropdown 1
+              value: dropdown1
+            - label: Dropdown 2
+              value: dropdown2
+            - label: Dropdown 3
+              value: dropdown3
+          placeholder: ""
+          required: false
+          type: dropdown
+        - bind: measurements.test_multidropdown
+          key: test_multidropdown
+          label: multidropdown component
+          multiple: false
+          options:
+            - label: Multidropdown 1
+              value: multidropdown1
+            - label: Multidropdown 2
+              value: multidropdown2
+            - label: Multidropdown 3
+              value: multidropdown3
+          placeholder: ""
+          required: false
+          type: multidropdown
+          default_value: ""
+

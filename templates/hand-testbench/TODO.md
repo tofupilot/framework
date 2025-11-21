@@ -1,0 +1,8 @@
+- Document how to create .pyi type stub files for plugs to enable IDE autocompletion and type checking in phases (manual creation, not auto-generated)
+- Document thread-safety requirements for plugs and clarify lifecycle: procedure vs slot semantics for concurrent access
+- Add way to disable reports generation in dev -> make it payable feature?
+- Add wait for input mechanism - pause phase execution to prompt operator for confirmation (e.g., confirm hardware connected, power on) before continuing to next python execution step
+  - Workaround: create two phases for now, one waiting the other in setup
+- Fix auto-import of job_worker path to avoid nested path construction like `sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "src-tauri", "python"))`
+- Support keyword arguments in plug method calls - currently only positional arguments work due to RPC protocol limitation in job_worker.py:516-519
+- Consider: Support passing Python objects (threading.Event, etc.) as plug method arguments? Currently only JSON-serializable types work due to RPC protocol. Would require pickle or shared memory. Probably not worth it - plugs should manage their own state/threading internally for cleaner API and proper separation of concerns.

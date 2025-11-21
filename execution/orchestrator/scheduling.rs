@@ -1,15 +1,13 @@
-use serde_json;
 use std::collections::HashMap;
-use tauri::{AppHandle, Emitter};
+use tauri::AppHandle;
+use tauri_specta::Event;
 
-use crate::execution::cli_output;
 use crate::execution::constants::scheduling;
-use crate::execution::job::Outcome;
-use crate::execution::job::{Job, JobResult};
-use crate::schema::procedure::StageScope;
+use crate::execution::job::{Job, JobResult, JobStatus, Outcome};
+use crate::procedure::schema::StageScope;
 
-use super::ExecutionStats;
-use super::Orchestrator;
+use super::orchestrator::ExecutionStats;
+use super::orchestrator::Orchestrator;
 
 impl Orchestrator {
     pub async fn execute_all(
@@ -32,7 +30,7 @@ impl Orchestrator {
             let state = self.state.read().await;
 
             if state.force_kill_requested {
-                cli_output::error("Force kill requested, breaking out of execution loop".to_string());
+                log::error!("Force kill requested, breaking out of execution loop");
                 drop(state);
                 break;
             }
@@ -42,24 +40,23 @@ impl Orchestrator {
             if state.shutdown_requested || has_stop {
                 for worker_id in 0..state.worker_state.num_workers() {
                     if let Some(job_id) = state.worker_state.get_worker_job(worker_id) {
-                        if let Some((phase_key, phase_name, slot_id)) = state.job_info.get(&job_id) {
-                            let slot = slot_id.clone().unwrap_or_else(|| "<shared>".to_string());
-
+                        if let Some(info) = state.job_info.get(&job_id) {
                             if let Some(ref app) = app_handle {
-                                let _ = app.emit(
-                                    "job-progress",
-                                    serde_json::json!({
-                                        "execution_id": self.execution_id,
-                                        "job_id": job_id.to_string(),
-                                        "slot_id": slot,
-                                        "phase_key": phase_key,
-                                        "phase_name": phase_name,
-                                        "status": "stopping",
-                                        "outcome": None::<String>,
-                                        "error": None::<String>,
-                                        "worker_id": Some(worker_id),
-                                    }),
-                                );
+                                let progress = super::orchestrator::JobProgress {
+                                    job_id: job_id.to_string(),
+                                    slot_id: info.slot_id.clone(),
+                                    phase_key: info.phase_key.clone(),
+                                    phase_name: info.phase_name.clone(),
+                                    stage_scope: StageScope::Main,
+                                    status: JobStatus::Stopping,
+                                    worker_id: Some(worker_id),
+                                    started_at: None,
+                                    timeout_ms: None,
+                                    outcome: None,
+                                    retry_count: 0,
+                                    error: None,
+                                };
+                                let _ = super::orchestrator::JobProgressEvent(progress).emit(app);
                             }
                         }
                     }
@@ -70,31 +67,28 @@ impl Orchestrator {
                     // Skip teardown phases - they will run after shutdown
                     if matches!(
                         job.stage_scope,
-                        crate::schema::procedure::StageScope::TeardownEach
-                            | crate::schema::procedure::StageScope::TeardownAll
+                        crate::procedure::schema::StageScope::TeardownEach
+                            | crate::procedure::schema::StageScope::TeardownAll
                     ) {
                         continue;
                     }
 
-                    let slot = job
-                        .slot_id
-                        .clone()
-                        .unwrap_or_else(|| "<shared>".to_string());
-
                     if let Some(ref app) = app_handle {
-                        let _ = app.emit(
-                            "job-progress",
-                            serde_json::json!({
-                                "execution_id": self.execution_id,
-                                "job_id": job.id.to_string(),
-                                "slot_id": slot,
-                                "phase_name": job.phase_name,
-                                "status": "skipped",
-                                "outcome": "skip",
-                                "error": None::<String>,
-                                "worker_id": None::<usize>,
-                            }),
-                        );
+                        let progress = super::orchestrator::JobProgress {
+                            job_id: job.id.to_string(),
+                            slot_id: job.slot_id.clone(),
+                            phase_key: job.phase_key.clone(),
+                            phase_name: job.phase_name.clone(),
+                            stage_scope: job.stage_scope.clone(),
+                            status: JobStatus::Skipped,
+                            worker_id: None,
+                            started_at: None,
+                            timeout_ms: job.timeout_ms,
+                            outcome: Some(Outcome::Skip),
+                            retry_count: job.retry_count,
+                            error: None,
+                        };
+                        let _ = super::orchestrator::JobProgressEvent(progress).emit(app);
                     }
                 }
 
@@ -137,10 +131,10 @@ impl Orchestrator {
                         self.emit_plug_scope_event("pass").await;
                     }
                     Err(e) => {
-                        crate::cli_output::warning(format!(
+                        log::warn!(
                             "Failed to auto-destroy each-scope plugs for {}: {}",
                             slot_id, e
-                        ));
+                        );
                         self.emit_plug_scope_event("error").await;
                     }
                 }
@@ -157,10 +151,10 @@ impl Orchestrator {
                     self.emit_plug_scope_event("pass").await;
                 }
                 Err(e) => {
-                    crate::cli_output::warning(format!(
+                    log::warn!(
                         "Failed to auto-destroy all-scope plugs: {}",
                         e
-                    ));
+                    );
                     self.emit_plug_scope_event("error").await;
                 }
             }
@@ -180,38 +174,26 @@ impl Orchestrator {
             let mut report_managers = self.report_managers.write().await;
             let state = self.state.read().await;
 
-            let shared_job_results: HashMap<uuid::Uuid, JobResult> = state
-                .job_results
-                .iter()
-                .filter(|(job_id, _)| {
-                    state
-                        .job_info
-                        .get(job_id)
-                        .map(|(_, _, sid)| sid.is_none())
-                        .unwrap_or(false)
-                })
-                .map(|(id, result)| (*id, result.clone()))
-                .collect();
+            let mut shared_jobs = Vec::new();
+            let mut slot_jobs: HashMap<&str, Vec<(uuid::Uuid, JobResult)>> = HashMap::new();
+
+            for (job_id, result) in &state.job_results {
+                if let Some(info) = state.job_info.get(job_id) {
+                    if let Some(slot_id) = &info.slot_id {
+                        slot_jobs.entry(slot_id.as_str())
+                            .or_default()
+                            .push((*job_id, result.clone()));
+                    } else {
+                        shared_jobs.push((*job_id, result.clone()));
+                    }
+                }
+            }
 
             for (slot_id, report_manager) in report_managers.iter_mut() {
-                // Only process actual slot reports (shared phases are included in each slot's report)
-
-                let mut slot_job_results: HashMap<uuid::Uuid, JobResult> = state
-                    .job_results
-                    .iter()
-                    .filter(|(job_id, _)| {
-                        state
-                            .job_info
-                            .get(job_id)
-                            .map(|(_, _, sid)| sid.as_deref() == Some(slot_id))
-                            .unwrap_or(false)
-                    })
+                let slot_job_results: HashMap<uuid::Uuid, JobResult> = shared_jobs.iter()
+                    .chain(slot_jobs.get(slot_id.as_str()).map(|v| v.as_slice()).unwrap_or(&[]))
                     .map(|(id, result)| (*id, result.clone()))
                     .collect();
-
-                for (job_id, result) in &shared_job_results {
-                    slot_job_results.insert(*job_id, result.clone());
-                }
 
                 let slot_stats = ExecutionStats {
                     total_jobs: slot_job_results.len(),
@@ -237,49 +219,25 @@ impl Orchestrator {
                 };
 
                 if let Err(e) =
-                    report_manager.finalize_run(&slot_stats, &slot_job_results, &state.job_info)
+                    report_manager.finalize_report(&slot_stats, &slot_job_results, &state.job_info)
                 {
-                    cli_output::print_section(
-                        cli_output::Section::Error,
-                        format!("Failed to generate test report for slot {}: {}", slot_id, e),
-                    );
+                    log::error!("Failed to generate test report for slot {}: {}", slot_id, e);
                 }
             }
         }
 
         if let Some(ref app) = app_handle {
-            let _ = app.emit("execution-complete", &stats);
+            let _ = super::orchestrator::ExecutionCompleteEvent(stats.clone()).emit(app);
         }
 
         match stats.run_outcome {
-            Some(Outcome::Pass) => cli_output::print_section(
-                cli_output::Section::Summary,
-                format!("Run PASSED: {} jobs processed", stats.total_jobs),
-            ),
-            Some(Outcome::Fail) => cli_output::print_section(
-                cli_output::Section::Summary,
-                format!("Run FAILED: {} jobs processed", stats.total_jobs),
-            ),
-            Some(Outcome::Error) => cli_output::print_section(
-                cli_output::Section::Summary,
-                format!("Run ERROR: {} jobs processed", stats.total_jobs),
-            ),
-            Some(Outcome::Skip) => cli_output::print_section(
-                cli_output::Section::Summary,
-                format!("Run SKIP: {} jobs processed", stats.total_jobs),
-            ),
-            Some(Outcome::Timeout) => cli_output::print_section(
-                cli_output::Section::Summary,
-                format!("Run TIMEOUT: {} jobs processed", stats.total_jobs),
-            ),
-            Some(Outcome::Aborted) => cli_output::print_section(
-                cli_output::Section::Summary,
-                format!("Run ABORTED: {} jobs processed", stats.total_jobs),
-            ),
-            None => cli_output::print_section(
-                cli_output::Section::Summary,
-                format!("Execution complete: {} jobs processed", stats.total_jobs),
-            ),
+            Some(Outcome::Pass) => log::info!("Run PASSED: {} jobs processed", stats.total_jobs),
+            Some(Outcome::Fail) => log::info!("Run FAILED: {} jobs processed", stats.total_jobs),
+            Some(Outcome::Error) => log::info!("Run ERROR: {} jobs processed", stats.total_jobs),
+            Some(Outcome::Skip) => log::info!("Run SKIP: {} jobs processed", stats.total_jobs),
+            Some(Outcome::Timeout) => log::info!("Run TIMEOUT: {} jobs processed", stats.total_jobs),
+            Some(Outcome::Aborted) => log::info!("Run ABORTED: {} jobs processed", stats.total_jobs),
+            None => log::info!("Execution complete: {} jobs processed", stats.total_jobs),
         }
 
         Ok(stats)
@@ -333,10 +291,7 @@ impl Orchestrator {
                 {
                     let mut state = self.state.write().await;
                     if let Err(e) = state.mark_job_active(job.id, worker_id) {
-                        cli_output::print_section(
-                            cli_output::Section::Error,
-                            format!("Failed to mark job active: {}", e),
-                        );
+                        log::error!("Failed to mark job active: {}", e);
                         drop(permit);
                         break;
                     }
@@ -387,10 +342,10 @@ impl Orchestrator {
                     });
 
                     if has_pending_main_phases || has_pending_main_in_checked {
-                        crate::cli_output::debug(format!(
+                        log::debug!(
                             "Teardown phase '{}' waiting for main phases in slot {} to complete",
                             job.phase_name, slot_id
-                        ));
+                        );
                         checked_jobs.push(job);
                         continue;
                     }
@@ -427,10 +382,10 @@ impl Orchestrator {
                     checked_jobs.push(job);
                     continue;
                 } else {
-                    crate::cli_output::debug(format!(
+                    log::debug!(
                         "Job {} plugs {:?} available",
                         job.phase_name, job.required_plugs
-                    ));
+                    );
                 }
             }
 

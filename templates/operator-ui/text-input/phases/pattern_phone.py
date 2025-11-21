@@ -1,0 +1,13 @@
+def pattern_phone(run):
+    log.info("Phone number pattern validation")
+    log.info("Pattern: ^\\+?[0-9]{1,3}-[0-9]{3}-[0-9]{4}$")
+    log.info("")
+    log.info("Valid examples:")
+    log.info("  ✓ +1-555-0100")
+    log.info("  ✓ 1-555-0100")
+    log.info("  ✓ +44-123-4567")
+    log.info("")
+    log.info("Invalid examples:")
+    log.info("  ✗ 5550100 (no dashes)")
+    log.info("  ✗ +1-555-01 (incomplete)")
+    log.info("  ✗ +1 555 0100 (spaces instead of dashes)")

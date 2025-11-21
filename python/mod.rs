@@ -1,18 +1,16 @@
-//! Python environment resolution and virtual environment management.
-//!
-//! Handles Python executable discovery, virtual environment creation/validation,
-//! and dependency installation for test phases.
-//!
-//! Resolution order: venv → UV-managed Python (auto-install if needed)
+//! Python venv management via UV and file operations.
+//! Commands: get_python_state, sync_python, delete_venv, resolve_python,
+//!           read_python_file, write_python_file, analyze_python_file
 
-pub mod environment;
-pub mod installation;
-pub mod manifest;
-pub mod resolution;
-pub mod types;
-pub mod utils;
+pub mod commands;
+pub mod identifier;
+pub mod venv;
 
-pub use installation::{ensure_python_available, install_uv_python, list_uv_pythons};
-pub use manifest::PythonManifest;
-pub use resolution::resolve_python_executable;
-pub use types::*;
+#[cfg(test)]
+mod tests;
+
+pub use commands::{
+    analyze_python_file, read_python_file, to_python_identifier_text, write_python_file,
+    PythonCallable, PythonEditorContext, PythonFileResult,
+};
+pub use venv::{resolve_python_internal, PythonState};

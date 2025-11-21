@@ -1,0 +1,43 @@
+name: Error Handling Demo
+version: 1.0.0
+description: Demonstrates error handling and timeout behavior
+execution:
+  model: slot_first
+  workers: 2
+  on_first_failure: continue
+setup:
+  - name: setup_all
+    scope: all
+    python: phases/setup_all
+    description: Configure and prepare test equipment - runs once at procedure start
+  - name: setup_each
+    python: phases/setup_each
+    description: Configure and prepare unit under test - runs before each slot
+
+main:
+  - name: working_function
+    python: phases/working_function
+    description: Should pass if module has no syntax errors
+
+  - name: divide_by_zero_error
+    python: phases/divide_by_zero_error
+    description: Runtime error (ZeroDivisionError) - tests exception handling
+
+  - name: simple_timeout
+    python: phases/simple_timeout
+    description: Tests timeout handling - sleeps for 5 seconds with 1 second timeout
+    timeout_s: 1
+
+  - name: logging_demo
+    python: phases/logging_demo
+    description: Demonstrates different logging methods (print and structured logs)
+
+teardown:
+  - name: teardown_each
+    python: phases/teardown_each
+    description: Clean up after testing each individual unit
+  - name: teardown_all
+    scope: all
+    python: phases/teardown_all
+    description: Shut down the entire test system once at end
+

@@ -1,0 +1,173 @@
+//! Structure validation: duplicates, dependencies, circular references.
+
+use std::collections::{HashMap, HashSet};
+use crate::procedure::schema::ProcedureDefinition;
+use super::types::{ValidationDiagnostic, RelatedDiagnosticInfo};
+use super::location_map::YamlLocationMap;
+
+fn check_duplicates<F>(
+    diagnostics: &mut Vec<ValidationDiagnostic>,
+    items: impl Iterator<Item = String>,
+    get_location: F,
+    error_code: &str,
+    item_type: &str,
+) where
+    F: Fn(&str) -> Option<(usize, usize, usize)>,
+{
+    let mut seen: HashMap<String, (usize, usize, usize)> = HashMap::new();
+
+    for name in items {
+        if let Some(existing_loc) = seen.get(&name) {
+            if let Some((line, col, len)) = get_location(&name) {
+                diagnostics.push(
+                    ValidationDiagnostic::error(
+                        error_code,
+                        format!("Duplicate {} '{}'", item_type, name),
+                        line,
+                        col,
+                        len,
+                    )
+                    .with_related(vec![RelatedDiagnosticInfo {
+                        message: "Also defined here".to_string(),
+                        start_line: existing_loc.0,
+                        start_column: existing_loc.1,
+                        end_line: existing_loc.0,
+                        end_column: existing_loc.1 + existing_loc.2,
+                    }]),
+                );
+            }
+        } else if let Some(loc) = get_location(&name) {
+            seen.insert(name, loc);
+        }
+    }
+}
+
+pub(super) fn validate_structure(
+    procedure: &ProcedureDefinition,
+    location_map: &YamlLocationMap,
+) -> Vec<ValidationDiagnostic> {
+    let mut diagnostics = Vec::new();
+
+    let all_phases: Vec<_> = procedure.setup.iter()
+        .chain(procedure.main.iter())
+        .chain(procedure.teardown.iter())
+        .collect();
+
+    check_duplicates(
+        &mut diagnostics,
+        all_phases.iter().map(|p| p.name.clone()),
+        |name| location_map.get_phase_location(name),
+        "duplicate-phase-name",
+        "phase name",
+    );
+
+    check_duplicates(
+        &mut diagnostics,
+        procedure.plugs.iter().map(|p| p.key.clone()),
+        |key| location_map.get_plug_location(key),
+        "duplicate-plug-key",
+        "plug key",
+    );
+
+    let phase_keys_set: HashSet<String> = all_phases.iter().map(|p| p.key.clone()).collect();
+    for phase in &all_phases {
+        for dep in &phase.depends_on {
+            if !phase_keys_set.contains(dep) {
+                let phase_name = phase.name.clone();
+                if let Some((line, col, len)) = location_map.get_phase_location(&phase_name) {
+                    diagnostics.push(ValidationDiagnostic::error(
+                        "orphaned-dependency",
+                        format!(
+                            "Phase '{}' depends on non-existent phase key '{}' (use phase keys, not names)",
+                            phase_name, dep
+                        ),
+                        line,
+                        col,
+                        len,
+                    ));
+                }
+            }
+        }
+    }
+
+    let phase_defs: Vec<_> = all_phases.iter().map(|p| (*p).clone()).collect();
+    if let Some(cycle) = detect_circular_dependencies(&phase_defs) {
+        if let Some(first_phase_name) = cycle.first() {
+            if let Some((line, col, len)) = location_map.get_phase_location(first_phase_name) {
+                diagnostics.push(ValidationDiagnostic::error(
+                    "circular-dependency",
+                    format!("Circular dependency detected: {}", cycle.join(" → ")),
+                    line,
+                    col,
+                    len,
+                ));
+            }
+        }
+    }
+
+    diagnostics
+}
+
+fn detect_circular_dependencies(
+    phases: &[crate::procedure::schema::PhaseDefinition],
+) -> Option<Vec<String>> {
+    let mut graph: HashMap<String, Vec<String>> = HashMap::new();
+    for phase in phases {
+        graph.insert(phase.key.clone(), phase.depends_on.clone());
+    }
+
+    let mut visited = HashSet::new();
+    let mut rec_stack = HashSet::new();
+    let mut path = Vec::new();
+
+    for phase in phases {
+        let phase_key = phase.key.clone();
+        if !visited.contains(&phase_key) {
+            if let Some(cycle) = dfs_detect_cycle(
+                &phase_key,
+                &graph,
+                &mut visited,
+                &mut rec_stack,
+                &mut path,
+            ) {
+                return Some(cycle);
+            }
+        }
+    }
+
+    None
+}
+
+fn dfs_detect_cycle(
+    node: &str,
+    graph: &HashMap<String, Vec<String>>,
+    visited: &mut HashSet<String>,
+    rec_stack: &mut HashSet<String>,
+    path: &mut Vec<String>,
+) -> Option<Vec<String>> {
+    visited.insert(node.to_string());
+    rec_stack.insert(node.to_string());
+    path.push(node.to_string());
+
+    if let Some(neighbors) = graph.get(node) {
+        for neighbor in neighbors {
+            if !visited.contains(neighbor) {
+                if let Some(cycle) = dfs_detect_cycle(neighbor, graph, visited, rec_stack, path) {
+                    return Some(cycle);
+                }
+            } else if rec_stack.contains(neighbor) {
+                let cycle_start = path
+                    .iter()
+                    .position(|n| n == neighbor)
+                    .expect("neighbor must be in path if in rec_stack");
+                let mut cycle = path[cycle_start..].to_vec();
+                cycle.push(neighbor.to_string());
+                return Some(cycle);
+            }
+        }
+    }
+
+    rec_stack.remove(node);
+    path.pop();
+    None
+}

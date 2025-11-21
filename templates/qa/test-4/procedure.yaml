@@ -1,0 +1,180 @@
+name: 'Test-4: all Ope UI in one phase'
+version: 1.0.0
+description: A new test procedure
+
+unit:
+  serial_number:
+    default_value: SN-11111
+  part_number:
+    default_value: PCB01
+
+main:
+- key: phase_1
+  name: New Phase 1
+  ui:
+    components:
+    - type: text_input
+      key: text_input
+      label: What is that?
+      description: describe what your seing
+      placeholder: ''
+      required: true
+      default_value: ''
+      trim: true
+      options: []
+- key: phase_2
+  name: New Phase 2
+  ui:
+    components:
+    - type: textarea
+      key: textarea
+      label: 'Tell me your life: '
+      placeholder: blablabla
+      required: true
+      default_value: ''
+      trim: true
+      options: []
+- key: phase_3
+  name: New Phase 3
+  ui:
+    components:
+    - type: number_input
+      key: number_input
+      label: 'Enter your magic number:'
+      required: true
+      trim: true
+      min: 0.0
+      max: 10.0
+      step: 1.0
+      options: []
+- key: phase_4
+  name: New Phase 4
+  ui:
+    components:
+    - type: switch
+      key: switch
+      label: Yes or No?
+      required: true
+      default_value: 'true'
+      trim: true
+      options:
+      - value: 'true'
+        label: Yes
+      - value: 'false'
+        label: No
+- key: phase_5
+  name: New Phase 5
+  ui:
+    components:
+    - type: radio
+      key: radio
+      label: Sun is shining?
+      required: true
+      default_value: option_1
+      trim: true
+      options:
+      - value: option_1
+        label: Yes
+      - value: option_2
+        label: No
+- key: phase_6
+  name: New Phase 6
+  ui:
+    components:
+    - type: dropdown
+      key: dropdown
+      label: 'Dropdown info:'
+      required: true
+      default_value: option_5
+      trim: true
+      options:
+      - value: option_1
+        label: Gerard
+      - value: option_2
+        label: David
+      - value: option_3
+        label: Alexandre
+      - value: option_4
+        label: Bob
+      - value: option_5
+        label: Michel
+- key: phase_7
+  name: New Phase 7
+  ui:
+    components:
+    - type: multidropdown
+      key: multidropdown
+      label: 'Multi drop:'
+      required: true
+      default_value: option_4
+      trim: true
+      options:
+      - value: option_1
+        label: G
+      - value: option_2
+        label: B
+      - value: option_3
+        label: X
+      - value: option_4
+        label: V
+      - value: option_5
+        label: Z
+  enabled: false
+- key: phase_8
+  name: New Phase 8
+  ui:
+    components:
+    - type: slider
+      key: slider
+      label: 'temperature slider:'
+      required: true
+      default_value: 30.0
+      trim: true
+      min: 25.0
+      max: 35.0
+      step: 1.0
+      options: []
+- key: phase_9
+  name: New Phase 9
+  ui:
+    components:
+    - type: radio
+      key: radio_79h
+      label: 'radio buttttonnnn:'
+      required: true
+      default_value: option_1
+      trim: true
+      options:
+      - value: option_1
+        label: '1'
+      - value: option_2
+        label: '2'
+      - value: option_3
+        label: '3'
+      - value: option_4
+        label: '5'
+- key: phase_10
+  name: New Phase 10
+  ui:
+    components:
+    - type: image
+      key: image
+      required: false
+      default_value: oscilloscope.jpeg
+      trim: true
+      options: []
+    - type: text
+      key: text
+      required: false
+      default_value: Hello
+      trim: true
+      options: []
+    - type: progress
+      key: progress
+      label: 'this is progress: '
+      required: false
+      default_value: 2.0
+      trim: true
+      min: 0.0
+      max: 100.0
+      options: []
