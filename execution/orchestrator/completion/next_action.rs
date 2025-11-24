@@ -5,78 +5,52 @@ pub fn determine_next_action(
     job_result: &JobResult,
     phase_outcome: &Outcome,
     phase_def: Option<&PhaseDefinition>,
+    should_stop_on_first_failure: bool,
 ) -> PhaseNextAction {
-    if matches!(job_result.phase_result, PhaseResult::Retry) {
+    if matches!(phase_outcome, Outcome::Error | Outcome::Timeout | Outcome::Stop) {
+        return PhaseNextAction::Stop;
+    }
+
+    if matches!(job_result.phase_result, PhaseResult::Retry) && matches!(phase_outcome, Outcome::Retry) {
         return PhaseNextAction::Retry;
     }
 
-    let is_terminal = job_result.error.is_some()
-        || job_result.timeout_secs.is_some()
-        || matches!(job_result.phase_result, PhaseResult::Stop);
-
-    if is_terminal {
-        if let Some(def) = phase_def {
-            get_next_action_for_terminal(phase_outcome, def)
-        } else {
-            PhaseNextAction::Stop
-        }
-    } else if let Some(def) = phase_def {
-        get_next_action_for_non_terminal(phase_outcome, def)
+    if let Some(def) = phase_def {
+        get_next_action_for_phase(phase_outcome, def, should_stop_on_first_failure)
     } else {
         match phase_outcome {
-            Outcome::Pass
-            | Outcome::Skip
-            | Outcome::Fail
-            | Outcome::Timeout
-            | Outcome::Aborted => PhaseNextAction::Continue,
-            Outcome::Error => PhaseNextAction::Stop,
+            Outcome::Pass | Outcome::Skip | Outcome::Retry => PhaseNextAction::Continue,
+            Outcome::Fail => {
+                if should_stop_on_first_failure {
+                    PhaseNextAction::Stop
+                } else {
+                    PhaseNextAction::Continue
+                }
+            }
+            Outcome::Error | Outcome::Timeout | Outcome::Stop => PhaseNextAction::Stop,
         }
     }
 }
 
-fn get_next_action_for_terminal(outcome: &Outcome, phase_def: &PhaseDefinition) -> PhaseNextAction {
-    if let Some(then_config) = &phase_def.then {
-        let configured = match outcome {
-            Outcome::Fail => then_config.fail.clone(),
-            Outcome::Error => then_config.error.clone(),
-            _ => None,
-        };
-
-        if let Some(next_action) = configured {
-            log::debug!(
-                "Phase '{}': Terminal result, using then.{:?}: {:?}",
-                phase_def.name,
-                outcome,
-                next_action
-            );
-            return next_action;
-        }
-    }
-
-    log::debug!(
-        "Phase '{}': Terminal result, using default: Stop",
-        phase_def.name
-    );
-    PhaseNextAction::Stop
-}
-
-fn get_next_action_for_non_terminal(
+fn get_next_action_for_phase(
     outcome: &Outcome,
     phase_def: &PhaseDefinition,
+    should_stop_on_first_failure: bool,
 ) -> PhaseNextAction {
+    // Check for explicit then.* configuration first
     if let Some(then_config) = &phase_def.then {
         let configured = match outcome {
             Outcome::Pass => then_config.pass.clone(),
             Outcome::Fail => then_config.fail.clone(),
+            Outcome::Timeout => then_config.timeout.clone().or(then_config.error.clone()),
             Outcome::Skip => None,
-            Outcome::Error => then_config.error.clone(),
-            Outcome::Aborted => then_config.error.clone(),
-            Outcome::Timeout => then_config.error.clone(),
+            Outcome::Retry => None,
+            Outcome::Error | Outcome::Stop => None,
         };
 
         if let Some(next_action) = configured {
             log::debug!(
-                "Phase '{}': Non-terminal, using then.{:?}: {:?}",
+                "Phase '{}': Using configured then.{:?}: {:?}",
                 phase_def.name,
                 outcome,
                 next_action
@@ -85,18 +59,26 @@ fn get_next_action_for_non_terminal(
         }
     }
 
+    // Apply default behavior, respecting global on_first_failure setting
     let default_action = match outcome {
-        Outcome::Pass | Outcome::Skip | Outcome::Fail | Outcome::Timeout | Outcome::Aborted => {
-            PhaseNextAction::Continue
+        Outcome::Pass | Outcome::Skip => PhaseNextAction::Continue,
+        Outcome::Fail => {
+            if should_stop_on_first_failure {
+                PhaseNextAction::Stop
+            } else {
+                PhaseNextAction::Continue
+            }
         }
-        Outcome::Error => PhaseNextAction::Stop,
+        Outcome::Retry => PhaseNextAction::Retry,
+        Outcome::Error | Outcome::Timeout | Outcome::Stop => PhaseNextAction::Stop,
     };
 
     log::debug!(
-        "Phase '{}': Non-terminal, using default for {:?}: {:?}",
+        "Phase '{}': Using default for {:?}: {:?} (stop_on_first_failure={})",
         phase_def.name,
         outcome,
-        default_action
+        default_action,
+        should_stop_on_first_failure
     );
 
     default_action

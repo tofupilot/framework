@@ -25,17 +25,14 @@ pub fn resolve_outcome(
         );
     }
 
-    let mut phase_outcome = Outcome::from_execution(
+    let phase_outcome = Outcome::from_execution(
         &job_result.phase_result,
         job_result.timeout_secs,
         job_result.error.as_ref(),
         measurements_pass,
         shutdown_requested,
+        job.can_retry(),
     );
-
-    if is_retry_limit_exceeded {
-        phase_outcome = Outcome::Error;
-    }
 
     (phase_outcome, is_retry_limit_exceeded)
 }

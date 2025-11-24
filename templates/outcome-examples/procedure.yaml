@@ -1,0 +1,62 @@
+id: 8f2ea03e-c911-11f0-8b52-1f01c0dd8c15
+name: Outcome Examples
+version: 1.0.0
+description: Comprehensive examples of all outcome cases from the UX design doc
+
+execution:
+  strategy: phase_first
+  workers: 1
+  on_first_failure: continue
+
+unit:
+  serial_number:
+    default_value: '00000'
+  part_number:
+    default_value: '000000'
+
+main:
+- name: case_1_retry
+  python: phases/case_1_retry
+  description: 'Case 1: phase.retry() → RETRY/fail → retry (bumps retry count and retries)'
+  retry:
+    limit: 3
+    delay: 1s
+- name: case_2_continue_pass
+  python: phases/case_2_continue_pass
+  description: 'Case 2: return/pass → CONTINUE/pass → continue (default happy path)'
+- name: case_3_fail
+  python: phases/case_3_fail
+  description: 'Case 3: phase.fail() → FAIL/fail → depends on on_first_failure'
+- name: case_4_timeout
+  python: phases/case_4_timeout
+  description: 'Case 4: timeout → _/timeout → stop (killed by timeout, overridable via then.timeout)'
+  enabled: false
+  timeout: 2s
+  then:
+    timeout: skip
+- name: case_5_error
+  python: phases/case_5_error
+  description: 'Case 5: exception → ERROR/error → stop (unexpected exception)'
+  enabled: false
+  then:
+    error: skip
+- name: case_6_stop
+  python: phases/case_6_stop
+  description: 'Case 6: phase.stop() → STOP/stop → stop (user-initiated stop)'
+  enabled: false
+  then: {}
+- name: case_7_skip
+  python: phases/case_7_skip
+  description: 'Case 7: phase.skip() → SKIP/skip → continue (skips to next phase)'
+- name: case_8_measurement_fail
+  python: phases/case_8_measurement_fail
+  description: 'Case 8: measurement validation fails → CONTINUE/fail → depends on on_first_failure'
+  measurements:
+  - name: voltage
+    unit: V
+    validators:
+    - operator: '>='
+      expected_value: 3.0
+- name: final_phase
+  python: phases/final_phase
+  description: Final phase - proves execution continued through all skipped outcomes

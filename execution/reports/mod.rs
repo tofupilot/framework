@@ -292,7 +292,11 @@ impl ReportManager {
     ) -> Result<Phase, String> {
         // Use the pre-computed outcome from JobResult
         // This is ALWAYS set by the completion handler and accounts for measurements, retries, and all edge cases
-        let outcome = result.phase_outcome;
+        // Map Outcome::Retry to Outcome::Fail for report storage (intermediate retry attempts should show as failed)
+        let outcome = match result.phase_outcome {
+            Outcome::Retry => Outcome::Fail,
+            other => other,
+        };
 
         let error = if let Some(ref e) = result.error {
             Some(e.clone())

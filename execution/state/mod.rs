@@ -12,6 +12,16 @@ pub struct JobInfo {
     pub slot_id: Option<String>,
 }
 
+/// Information about a pending delayed retry task
+#[derive(Debug)]
+pub struct PendingDelayedRetry {
+    pub handle: tokio::task::JoinHandle<()>,
+    pub phase_key: String,
+    pub phase_name: String,
+    pub slot_id: Option<String>,
+    pub job_id: Uuid,
+}
+
 /// Centralized state for the orchestrator to reduce lock complexity
 ///
 /// Lock ordering convention:
@@ -36,6 +46,7 @@ pub struct OrchestratorState {
     pub should_stop_on_first_failure: bool, // Stop execution on first phase failure
     pub pending_slot_jobs: Vec<(String, Vec<Job>)>, // For slot-first: remaining slots to process
     pub teardown_procedure_jobs: Vec<Job>, // Teardown procedure jobs to run after all slots
+    pub pending_delayed_retry_handles: Vec<PendingDelayedRetry>, // Handles to spawned retry delay tasks with job info
 }
 
 impl OrchestratorState {
@@ -55,13 +66,21 @@ impl OrchestratorState {
             should_stop_on_first_failure: false,
             pending_slot_jobs: Vec::new(),
             teardown_procedure_jobs: Vec::new(),
+            pending_delayed_retry_handles: Vec::new(),
         }
     }
 
     /// Check if execution is complete
     pub fn is_complete(&self) -> bool {
-        (self.job_queue.is_empty() && self.worker_state.count_busy() == 0)
+        (self.job_queue.is_empty()
+            && self.worker_state.count_busy() == 0
+            && self.pending_delayed_retry_handles.is_empty())
             || self.shutdown_requested
+    }
+
+    /// Clean up finished delayed retry task handles
+    pub fn cleanup_finished_retry_handles(&mut self) {
+        self.pending_delayed_retry_handles.retain(|pending| !pending.handle.is_finished());
     }
 
     /// Get the next ready job from the queue

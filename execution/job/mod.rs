@@ -15,8 +15,9 @@ pub enum Outcome {
     Fail,
     Error,
     Timeout,
-    Aborted,
+    Stop,
     Skip,
+    Retry,
 }
 
 // Lifecycle states (no completion outcomes)
@@ -87,15 +88,11 @@ impl Outcome {
         error: Option<&String>,
         measurements_pass: bool,
         shutdown_requested: bool,
+        can_retry: bool,
     ) -> Self {
         // Terminal errors → ERROR
         if error.is_some() {
             return Outcome::Error;
-        }
-
-        // Manual abort or shutdown → ABORTED
-        if shutdown_requested || matches!(result, PhaseResult::Stop) {
-            return Outcome::Aborted;
         }
 
         // Timeout → TIMEOUT
@@ -103,18 +100,32 @@ impl Outcome {
             return Outcome::Timeout;
         }
 
-        // Retry/Skip → SKIP
-        if matches!(result, PhaseResult::Retry | PhaseResult::Skip) {
+        // Shutdown or explicit stop → STOP (shutdown takes precedence over retry)
+        if shutdown_requested || matches!(result, PhaseResult::Stop) {
+            return Outcome::Stop;
+        }
+
+        // Retry (only if authorized) → RETRY or FAIL
+        if matches!(result, PhaseResult::Retry) {
+            return if can_retry {
+                Outcome::Retry
+            } else {
+                Outcome::Fail
+            };
+        }
+
+        // Measurement failures → FAIL (takes precedence over other phase results)
+        if !measurements_pass {
+            return Outcome::Fail;
+        }
+
+        // Skip → SKIP
+        if matches!(result, PhaseResult::Skip) {
             return Outcome::Skip;
         }
 
         // Explicit failures → FAIL
-        if matches!(result, PhaseResult::Fail | PhaseResult::Stop) {
-            return Outcome::Fail;
-        }
-
-        // Measurement failures → FAIL
-        if !measurements_pass {
+        if matches!(result, PhaseResult::Fail) {
             return Outcome::Fail;
         }
 

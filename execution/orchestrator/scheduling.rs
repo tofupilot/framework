@@ -100,6 +100,12 @@ impl Orchestrator {
             }
             drop(state);
 
+            // Clean up finished delayed retry task handles
+            {
+                let mut state = self.state.write().await;
+                state.cleanup_finished_retry_handles();
+            }
+
             tokio::select! {
                 Some(event) = completion_rx.recv() => {
                     let should_continue = self.handle_job_completion(event, app_handle.clone()).await;
@@ -236,7 +242,8 @@ impl Orchestrator {
             Some(Outcome::Error) => log::info!("Run ERROR: {} jobs processed", stats.total_jobs),
             Some(Outcome::Skip) => log::info!("Run SKIP: {} jobs processed", stats.total_jobs),
             Some(Outcome::Timeout) => log::info!("Run TIMEOUT: {} jobs processed", stats.total_jobs),
-            Some(Outcome::Aborted) => log::info!("Run ABORTED: {} jobs processed", stats.total_jobs),
+            Some(Outcome::Stop) => log::info!("Run STOPPED: {} jobs processed", stats.total_jobs),
+            Some(Outcome::Retry) => log::info!("Run RETRY: {} jobs processed", stats.total_jobs),
             None => log::info!("Execution complete: {} jobs processed", stats.total_jobs),
         }
 

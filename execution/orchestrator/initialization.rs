@@ -107,6 +107,16 @@ impl Orchestrator {
             log::info!("on_first_failure is set to STOP - test will stop on first phase failure");
         }
 
+        // Validate configuration consistency and emit warnings
+        if let Some(exec_config) = &self.procedure_definition.execution {
+            let all_phases = self.procedure_definition.get_all_phases_with_stage_scope();
+            let phase_defs: Vec<_> = all_phases.iter().map(|(_, phase)| *phase).collect();
+            let warnings = exec_config.validate_consistency(&phase_defs);
+            for warning in warnings {
+                log::warn!("Configuration warning: {}", warning);
+            }
+        }
+
         // Initialize display based on CLI mode preferences
         {
             let _total_phases = self.procedure_definition

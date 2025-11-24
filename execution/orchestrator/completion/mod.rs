@@ -6,3 +6,6 @@ mod event_emitter;
 mod handler;
 mod next_action;
 mod outcome_resolver;
+
+#[cfg(test)]
+mod tests;

@@ -251,12 +251,12 @@ impl Orchestrator {
 
         join_all(shutdown_futures).await;
 
-        // Step 3: Emit "aborted" outcome for all workers with jobs
+        // Step 3: Emit "stop" outcome for all workers with jobs
         for (worker_id, _) in workers.iter().enumerate() {
             if let Some((job_id, phase_key, phase_name, slot_id)) = job_map.get(&worker_id) {
                 if let Some(app) = app_handle {
                     log::debug!(
-                        "Emitting outcome=aborted for phase={}, slot={}",
+                        "Emitting outcome=stop for phase={}, slot={}",
                         phase_name, slot_id
                     );
                     Self::emit_job_event(
@@ -266,7 +266,7 @@ impl Orchestrator {
                         phase_name,
                         StageScope::Main,
                         JobStatus::Completed,
-                        Some(Outcome::Aborted),
+                        Some(Outcome::Stop),
                         Some("Execution stopped by user".to_string()),
                         None,
                         Some(app),
@@ -474,16 +474,46 @@ impl Orchestrator {
             }
         }
 
-        let (running_jobs_info, regular_jobs_info, teardown_jobs) = {
+        let (running_jobs_info, regular_jobs_info, teardown_jobs, pending_retry_handles) = {
             let mut state = self.state.write().await;
             state.shutdown_requested = true;
-            Self::collect_and_complete_jobs(
+            let handles = std::mem::take(&mut state.pending_delayed_retry_handles);
+            let result = Self::collect_and_complete_jobs(
                 &mut state,
                 "Execution stopped by user".to_string(),
                 None,
                 true,
-            )
+            );
+            (result.0, result.1, result.2, handles)
         };
+
+        // Abort all pending delayed retry tasks and emit stop events
+        for pending in pending_retry_handles.iter() {
+            pending.handle.abort();
+
+            // Emit stop event for the aborted retry
+            if let Some(ref app) = app_handle {
+                use super::super::orchestrator::{JobProgress, JobProgressEvent};
+                use crate::execution::job::{JobStatus, Outcome};
+                use crate::procedure::schema::StageScope;
+
+                let progress = JobProgress {
+                    job_id: pending.job_id.to_string(),
+                    slot_id: pending.slot_id.clone(),
+                    phase_key: pending.phase_key.clone(),
+                    phase_name: pending.phase_name.clone(),
+                    stage_scope: StageScope::Main,
+                    status: JobStatus::Skipped,
+                    worker_id: None,
+                    started_at: None,
+                    timeout_ms: None,
+                    outcome: Some(Outcome::Stop),
+                    retry_count: 0,
+                    error: Some("Retry cancelled due to shutdown".to_string()),
+                };
+                let _ = JobProgressEvent(progress).emit(&**app);
+            }
+        }
 
         let mut workers = {
             let mut guard = self.workers.write().await;
@@ -535,16 +565,46 @@ impl Orchestrator {
     pub async fn force_kill(&mut self, app_handle: Option<&AppHandle>) -> Result<(), String> {
         log::info!("Force killing execution - no teardown phases will run");
 
-        let (running_jobs_info, queued_jobs_info, _) = {
+        let (running_jobs_info, queued_jobs_info, _, pending_retry_handles) = {
             let mut state = self.state.write().await;
             state.shutdown_requested = true;
-            Self::collect_and_complete_jobs(
+            let handles = std::mem::take(&mut state.pending_delayed_retry_handles);
+            let result = Self::collect_and_complete_jobs(
                 &mut state,
                 "Force killed by user".to_string(),
                 None,
                 false,
-            )
+            );
+            (result.0, result.1, result.2, handles)
         };
+
+        // Abort all pending delayed retry tasks and emit error events
+        for pending in pending_retry_handles.iter() {
+            pending.handle.abort();
+
+            // Emit stop event for the aborted retry
+            if let Some(ref app) = app_handle {
+                use super::super::orchestrator::{JobProgress, JobProgressEvent};
+                use crate::execution::job::{JobStatus, Outcome};
+                use crate::procedure::schema::StageScope;
+
+                let progress = JobProgress {
+                    job_id: pending.job_id.to_string(),
+                    slot_id: pending.slot_id.clone(),
+                    phase_key: pending.phase_key.clone(),
+                    phase_name: pending.phase_name.clone(),
+                    stage_scope: StageScope::Main,
+                    status: JobStatus::Completed,
+                    worker_id: None,
+                    started_at: None,
+                    timeout_ms: None,
+                    outcome: Some(Outcome::Error),
+                    retry_count: 0,
+                    error: Some("Force killed by user".to_string()),
+                };
+                let _ = JobProgressEvent(progress).emit(&**app);
+            }
+        }
 
         let running_jobs_for_emit: Vec<(uuid::Uuid, String, String, String)> = running_jobs_info
             .iter()
@@ -671,7 +731,7 @@ impl Orchestrator {
             Self::emit_job_events(
                 &running_jobs_for_emit,
                 JobStatus::Completed,
-                Some(Outcome::Aborted),
+                Some(Outcome::Stop),
                 Some("Force killed by user".to_string()),
                 Some(app),
             );

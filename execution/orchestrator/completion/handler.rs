@@ -26,9 +26,9 @@ impl Orchestrator {
             ),
         };
 
-        let shutdown_requested = {
+        let (shutdown_requested, should_stop_on_first_failure) = {
             let state = self.state.read().await;
-            state.shutdown_requested
+            (state.shutdown_requested, state.should_stop_on_first_failure)
         };
 
         let (phase_outcome, is_retry_limit_exceeded) =
@@ -40,14 +40,27 @@ impl Orchestrator {
             outcome_resolver::format_error_message(is_retry_limit_exceeded, &job_result);
 
         log::debug!(
-            "Phase '{}': phase_result={:?}, phase_outcome={:?}",
+            "DEBUG Phase '{}': phase_result={:?}, phase_outcome={:?}, retry_count={}, retry_limit={}, can_retry={}",
             event.original_job.phase_name,
             job_result.phase_result,
-            phase_outcome
+            phase_outcome,
+            event.original_job.retry_count,
+            event.original_job.retry_limit,
+            event.original_job.can_retry()
         );
 
-        let next_action =
-            next_action::determine_next_action(&job_result, &phase_outcome, phase_def);
+        let next_action = next_action::determine_next_action(
+            &job_result,
+            &phase_outcome,
+            phase_def,
+            should_stop_on_first_failure,
+        );
+
+        log::debug!(
+            "DEBUG Phase '{}': next_action={:?}",
+            event.original_job.phase_name,
+            next_action
+        );
 
         let mut job_result = job_result;
         job_result.phase_outcome = phase_outcome;
@@ -86,12 +99,15 @@ impl Orchestrator {
 
         let mut state = self.state.write().await;
 
-        let phase_failed = matches!(
+        let is_setup_failure = matches!(
+            event.original_job.stage_scope,
+            StageScope::SetupAll | StageScope::SetupEach
+        ) && (matches!(
             phase_outcome,
-            Outcome::Fail | Outcome::Error | Outcome::Timeout | Outcome::Aborted
-        ) || is_retry_limit_exceeded;
+            Outcome::Fail | Outcome::Error | Outcome::Timeout | Outcome::Stop
+        ) || is_retry_limit_exceeded);
 
-        if phase_failed {
+        if is_setup_failure {
             self.handle_phase_failure(&mut state, &event, app_handle.as_ref())
                 .await;
         }
@@ -238,6 +254,16 @@ impl Orchestrator {
         job_result: JobResult,
         app_handle: Option<&AppHandle>,
     ) -> bool {
+        let outcome = job_result.phase_outcome;
+
+        let is_terminal_outcome =
+            matches!(outcome, Outcome::Error | Outcome::Timeout | Outcome::Stop);
+
+        if is_terminal_outcome {
+            self.handle_stop(state, event, job_result, app_handle).await;
+            return false;
+        }
+
         match next_action {
             PhaseNextAction::Retry => {
                 self.handle_retry(state, event, job_result, app_handle)
@@ -257,10 +283,6 @@ impl Orchestrator {
                 );
                 true
             }
-            PhaseNextAction::Fail => {
-                self.handle_fail(state, event, job_result, app_handle).await;
-                true
-            }
         }
     }
 
@@ -272,6 +294,14 @@ impl Orchestrator {
         app_handle: Option<&AppHandle>,
     ) -> bool {
         let should_retry = event.original_job.can_retry();
+
+        log::debug!(
+            "DEBUG handle_retry called: phase={}, should_retry={}, retry_count={}, retry_limit={}",
+            event.original_job.phase_name,
+            should_retry,
+            event.original_job.retry_count,
+            event.original_job.retry_limit
+        );
 
         if !should_retry {
             state.complete_job_with_info(
@@ -322,11 +352,28 @@ impl Orchestrator {
 
         if let Some(delay_ms) = retry_job.retry_delay_ms {
             let state_arc = self.state.clone();
-            tokio::spawn(async move {
+            let phase_key = retry_job.phase_key.clone();
+            let phase_name = retry_job.phase_name.clone();
+            let slot_id = retry_job.slot_id.clone();
+            let retry_job_id = retry_job.id;
+
+            let handle = tokio::spawn(async move {
                 tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
                 let mut state = state_arc.write().await;
-                state.enqueue_retry_job(retry_job);
+                if !state.shutdown_requested {
+                    state.enqueue_retry_job(retry_job);
+                }
             });
+
+            state.pending_delayed_retry_handles.push(
+                crate::execution::state::PendingDelayedRetry {
+                    handle,
+                    phase_key,
+                    phase_name,
+                    slot_id,
+                    job_id: retry_job_id,
+                },
+            );
         } else {
             state.enqueue_retry_job(retry_job);
         }
@@ -341,18 +388,32 @@ impl Orchestrator {
         job_result: JobResult,
         app_handle: Option<&AppHandle>,
     ) {
-        let slot_display = event.original_job.slot_id.as_deref().unwrap_or("null");
-        log::info!("Stopping slot {} due to phase outcome", slot_display);
-
-        let cancelled_jobs = if let Some(ref slot_id) = event.original_job.slot_id {
-            state.cancel_slot_jobs(slot_id)
-        } else {
-            Vec::new()
+        let outcome = job_result.phase_outcome;
+        let reason = match outcome {
+            Outcome::Error => "error",
+            Outcome::Timeout => "timeout",
+            Outcome::Stop => "stop",
+            Outcome::Fail => "failure (on_first_failure: stop)",
+            _ => "terminal outcome",
         };
+
+        log::warn!(
+            "Phase '{}' resulted in {} - stopping all execution",
+            event.original_job.phase_name,
+            reason
+        );
+
+        let cancelled_jobs = state.cancel_all_jobs(&format!(
+            "Stopped due to phase {} ({})",
+            event.original_job.phase_name, reason
+        ));
 
         self.emit_cancelled_jobs(
             &cancelled_jobs,
-            &format!("Skipped because slot {} stopped", slot_display),
+            &format!(
+                "Cancelled due to {} in phase {}",
+                reason, event.original_job.phase_name
+            ),
             JobStatus::Skipped,
             Outcome::Skip,
             app_handle,
@@ -368,49 +429,5 @@ impl Orchestrator {
         );
 
         state.shutdown_requested = true;
-        log::warn!(
-            "Phase '{}' resulted in STOP action - setting shutdown_requested=true and will return false",
-            event.original_job.phase_name
-        );
-    }
-
-    async fn handle_fail(
-        &self,
-        state: &mut crate::execution::state::OrchestratorState,
-        event: JobCompletionEvent,
-        job_result: JobResult,
-        app_handle: Option<&AppHandle>,
-    ) {
-        log::info!(
-            "Phase {} failed - stopping execution",
-            event.original_job.phase_name
-        );
-
-        if state.should_stop_on_first_failure {
-            let cancelled_jobs =
-                state.cancel_all_jobs("Stopped due to on_first_failure: stop after phase failure");
-            self.emit_cancelled_jobs(
-                &cancelled_jobs,
-                "Stopped due to on_first_failure: stop",
-                JobStatus::Skipped,
-                Outcome::Skip,
-                app_handle,
-            )
-            .await;
-
-            state.shutdown_requested = true;
-            log::warn!(
-                "Phase '{}' failed with on_first_failure: stop - setting shutdown_requested=true to trigger graceful shutdown with teardown",
-                event.original_job.phase_name
-            );
-        }
-
-        state.complete_job_with_info(
-            event.job_id,
-            event.original_job.phase_key.clone(),
-            event.original_job.phase_name.clone(),
-            event.original_job.slot_id.clone(),
-            job_result,
-        );
     }
 }

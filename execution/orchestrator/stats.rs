@@ -87,7 +87,7 @@ impl Orchestrator {
         job_results: &[&JobResult],
         shutdown_requested: bool,
     ) -> Outcome {
-        // Priority order: ERROR → ABORTED → TIMEOUT → FAIL → PASS
+        // Priority order: ERROR → STOP → TIMEOUT → FAIL → PASS
 
         let has_error = job_results.iter().any(|r| r.error.is_some());
         if has_error {
@@ -95,12 +95,12 @@ impl Orchestrator {
         }
 
         if shutdown_requested {
-            return Outcome::Aborted;
+            return Outcome::Stop;
         }
 
         let has_stop = job_results.iter().any(|r| r.should_stop_test());
         if has_stop {
-            return Outcome::Aborted;
+            return Outcome::Stop;
         }
 
         let has_timeout = job_results.iter().any(|r| r.timeout_secs.is_some());

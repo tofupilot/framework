@@ -429,6 +429,32 @@ impl Default for ExecutionConfig {
     }
 }
 
+impl ExecutionConfig {
+    /// Validate consistency between global execution config and phase-level then configs
+    /// Returns warnings for potentially conflicting configurations
+    pub fn validate_consistency(&self, phases: &[&PhaseDefinition]) -> Vec<String> {
+        let mut warnings = Vec::new();
+
+        for phase in phases {
+            if let Some(then_config) = &phase.then {
+                // Warning: on_first_failure: stop + then.fail: continue (conflict)
+                if matches!(self.on_first_failure, FirstFailureAction::Stop) {
+                    if let Some(PhaseNextAction::Continue) = then_config.fail {
+                        warnings.push(format!(
+                            "Phase '{}': on_first_failure is 'stop' but then.fail is 'continue'. \
+                             Explicit then.fail will override global setting.",
+                            phase.name
+                        ));
+                    }
+                }
+
+            }
+        }
+
+        warnings
+    }
+}
+
 #[derive(Debug, Deserialize, Default, Clone)]
 pub enum ParallelMode {
     #[default]
@@ -457,7 +483,6 @@ pub enum PhaseNextAction {
     Stop,
     Retry,
     Skip,
-    Fail,
 }
 
 #[derive(Debug, Serialize, Deserialize, Validate, Clone, specta::Type)]
