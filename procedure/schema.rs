@@ -4,6 +4,8 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use validator::Validate;
 
+pub const DEFAULT_WORKERS: usize = 8;
+
 fn validate_python_identifier(key: &str) -> Result<(), validator::ValidationError> {
     if !crate::python::identifier::is_valid_python_identifier(key) {
         return Err(validator::ValidationError::new("invalid_python_identifier"));
@@ -24,7 +26,7 @@ fn default_strategy() -> ExecutionStrategy {
 }
 
 fn default_workers() -> usize {
-    8
+    DEFAULT_WORKERS
 }
 
 fn default_true() -> bool {

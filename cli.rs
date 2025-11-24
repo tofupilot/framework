@@ -42,7 +42,10 @@ pub fn run(procedure_path: PathBuf) {
 
         let procedure_dir = procedure_path.parent().unwrap_or_else(|| std::path::Path::new(".")).to_path_buf();
 
-        let worker_count = procedure_def.execution.as_ref().map(|e| e.workers).unwrap_or_else(num_cpus::get);
+        let worker_count = procedure_def.execution.as_ref().map(|e| e.workers).unwrap_or_else(|| {
+            log::warn!("No execution section found in procedure, defaulting to {} workers", crate::procedure::schema::DEFAULT_WORKERS);
+            crate::procedure::schema::DEFAULT_WORKERS
+        });
         let execution_id = uuid::Uuid::new_v4().to_string();
         let run_id = uuid::Uuid::new_v4().to_string();
         let mut orchestrator = Orchestrator::new(
