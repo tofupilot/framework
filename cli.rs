@@ -17,9 +17,9 @@ pub fn parse_args() -> PathBuf {
 pub fn print_help(program_name: &str) {
     println!("TofuPilot");
     println!("\nUsage:");
-    println!("  {}                        Launch GUI application", program_name);
-    println!("  {} --cli <procedure.yaml> Run procedure in CLI mode", program_name);
-    println!("  {} --help                 Show this help message", program_name);
+    println!("  {}                       Launch GUI application", program_name);
+    println!("  {} run <procedure.yaml>  Run procedure in CLI mode", program_name);
+    println!("  {} help                  Show this help message", program_name);
 }
 
 pub fn run(procedure_path: PathBuf) {

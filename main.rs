@@ -8,11 +8,11 @@ fn main() {
 
     if args.len() > 1 {
         match args[1].as_str() {
-            "--cli" | "-c" => {
+            "run" => {
                 let procedure_path = tofupilot_lib::cli::parse_args();
                 tofupilot_lib::cli::run(procedure_path);
             }
-            "--help" | "-h" => {
+            "help" => {
                 tofupilot_lib::cli::print_help(&args[0]);
                 std::process::exit(0);
             }
