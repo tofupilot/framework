@@ -540,26 +540,26 @@ fn compute_aggregation_value(value: &Value, aggregation_type: &str) -> Value {
         }
 
         match aggregation_type {
-            "mean" | "avg" | "average" => {
+            "mean" => {
                 let sum: f64 = numbers.iter().sum();
                 Value::from(sum / numbers.len() as f64)
             }
-            "min" | "minimum" => numbers
+            "min" => numbers
                 .iter()
                 .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
                 .map(|&v| Value::from(v))
                 .unwrap_or(Value::Null),
-            "max" | "maximum" => numbers
+            "max" => numbers
                 .iter()
                 .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
                 .map(|&v| Value::from(v))
                 .unwrap_or(Value::Null),
-            "sum" | "total" => {
+            "sum" => {
                 let sum: f64 = numbers.iter().sum();
                 Value::from(sum)
             }
-            "count" | "length" => Value::from(numbers.len() as i64),
-            "std" | "stddev" | "standard_deviation" => {
+            "count" => Value::from(numbers.len() as i64),
+            "std" => {
                 if numbers.len() < 2 {
                     return Value::from(0.0);
                 }

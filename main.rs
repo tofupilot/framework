@@ -9,8 +9,8 @@ fn main() {
     if args.len() > 1 {
         match args[1].as_str() {
             "--cli" | "-c" => {
-                let (procedure_dir, procedure_file) = tofupilot_lib::cli::parse_args();
-                tofupilot_lib::cli::run(procedure_dir, procedure_file);
+                let procedure_path = tofupilot_lib::cli::parse_args();
+                tofupilot_lib::cli::run(procedure_path);
             }
             "--help" | "-h" => {
                 tofupilot_lib::cli::print_help(&args[0]);

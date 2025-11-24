@@ -39,8 +39,8 @@ impl UiComponent {
                 | ComponentType::NumberInput
                 | ComponentType::Textarea
                 | ComponentType::Radio
-                | ComponentType::Dropdown
-                | ComponentType::Multidropdown
+                | ComponentType::Select
+                | ComponentType::Multiselect
                 | ComponentType::Checklist
                 | ComponentType::Switch
                 | ComponentType::Slider
@@ -115,6 +115,10 @@ pub struct UiComponent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pattern: Option<String>, // Regex pattern for text input validation
 
+    // Textarea-specific
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rows: Option<u32>, // Number of visible text lines for textarea
+
     // Text prefix/suffix
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prefix: Option<String>, // Text prefix (e.g., "$", "https://")
@@ -149,8 +153,8 @@ pub enum ComponentType {
     Switch,
     Textarea,
     Radio,
-    Dropdown,
-    Multidropdown,
+    Select,
+    Multiselect,
     Checklist,
     Slider,
 
@@ -172,8 +176,8 @@ impl ComponentType {
             "switch",
             "textarea",
             "radio",
-            "dropdown",
-            "multidropdown",
+            "select",
+            "multiselect",
             "checklist",
             "slider",
             // Display types
@@ -192,8 +196,8 @@ impl ComponentType {
             "number_input" => Some(ComponentType::NumberInput),
             "textarea" => Some(ComponentType::Textarea),
             "radio" => Some(ComponentType::Radio),
-            "dropdown" => Some(ComponentType::Dropdown),
-            "multidropdown" => Some(ComponentType::Multidropdown),
+            "select" => Some(ComponentType::Select),
+            "multiselect" => Some(ComponentType::Multiselect),
             "checklist" => Some(ComponentType::Checklist),
             "switch" => Some(ComponentType::Switch),
             "slider" => Some(ComponentType::Slider),
@@ -215,8 +219,8 @@ impl ComponentType {
             ComponentType::NumberInput => "number_input",
             ComponentType::Textarea => "textarea",
             ComponentType::Radio => "radio",
-            ComponentType::Dropdown => "dropdown",
-            ComponentType::Multidropdown => "multidropdown",
+            ComponentType::Select => "select",
+            ComponentType::Multiselect => "multiselect",
             ComponentType::Checklist => "checklist",
             ComponentType::Switch => "switch",
             ComponentType::Slider => "slider",
@@ -235,8 +239,8 @@ impl ComponentType {
                 | ComponentType::NumberInput
                 | ComponentType::Textarea
                 | ComponentType::Radio
-                | ComponentType::Dropdown
-                | ComponentType::Multidropdown
+                | ComponentType::Select
+                | ComponentType::Multiselect
                 | ComponentType::Checklist
                 | ComponentType::Switch
                 | ComponentType::Slider

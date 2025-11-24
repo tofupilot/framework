@@ -23,7 +23,7 @@ setup:
   description: Here we connect to a plug
   ui:
     components:
-    - type: multidropdown
+    - type: multiselect
       key: multidropdown
       options: []
   enabled: false
@@ -33,7 +33,7 @@ main:
   name: Operator blaz
   ui:
     components:
-    - type: multidropdown
+    - type: multiselect
       key: multidropdown
       label: 'Select your name '
       required: true

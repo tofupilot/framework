@@ -3,7 +3,7 @@ use crate::execution::types::UnitInfo;
 use std::env;
 use std::path::PathBuf;
 
-pub fn parse_args() -> (PathBuf, Option<String>) {
+pub fn parse_args() -> PathBuf {
     let args: Vec<String> = env::args().collect();
 
     if args.len() < 3 {
@@ -11,21 +11,18 @@ pub fn parse_args() -> (PathBuf, Option<String>) {
         std::process::exit(1);
     }
 
-    let dir = PathBuf::from(&args[2]);
-    let file = args.get(3).map(|s| s.to_string());
-
-    (dir, file)
+    PathBuf::from(&args[2])
 }
 
 pub fn print_help(program_name: &str) {
     println!("TofuPilot");
     println!("\nUsage:");
-    println!("  {}                      Launch GUI application", program_name);
-    println!("  {} --cli <dir> <file>   Run procedure in CLI mode", program_name);
-    println!("  {} --help               Show this help message", program_name);
+    println!("  {}                        Launch GUI application", program_name);
+    println!("  {} --cli <procedure.yaml> Run procedure in CLI mode", program_name);
+    println!("  {} --help                 Show this help message", program_name);
 }
 
-pub fn run(procedure_dir: PathBuf, procedure_file: Option<String>) {
+pub fn run(procedure_path: PathBuf) {
     let runtime = match tokio::runtime::Runtime::new() {
         Ok(rt) => rt,
         Err(e) => {
@@ -35,19 +32,15 @@ pub fn run(procedure_dir: PathBuf, procedure_file: Option<String>) {
     };
 
     runtime.block_on(async {
-        let procedure_def = if let Some(ref file) = procedure_file {
-            let full_path = procedure_dir.join(file);
-            match crate::procedure::load_procedure_definition(&full_path) {
-                Ok(def) => def,
-                Err(e) => {
-                    log::error!("Failed to load procedure: {}", e);
-                    return;
-                }
+        let procedure_def = match crate::procedure::load_procedure_definition(&procedure_path) {
+            Ok(def) => def,
+            Err(e) => {
+                log::error!("Failed to load procedure: {}", e);
+                return;
             }
-        } else {
-            log::error!("No procedure file specified");
-            return;
         };
+
+        let procedure_dir = procedure_path.parent().unwrap_or_else(|| std::path::Path::new(".")).to_path_buf();
 
         let worker_count = procedure_def.execution.as_ref().map(|e| e.workers).unwrap_or_else(num_cpus::get);
         let execution_id = uuid::Uuid::new_v4().to_string();
@@ -82,12 +75,9 @@ pub fn run(procedure_dir: PathBuf, procedure_file: Option<String>) {
             }
         }
 
-        if let Some(file) = procedure_file {
-            let full_path = procedure_dir.join(file);
-            let _ = orchestrator
-                .initialize_report_managers(&full_path, &slots)
-                .await;
-        }
+        let _ = orchestrator
+            .initialize_report_managers(&procedure_path, &slots)
+            .await;
 
         log::info!("Workers: {} | Slots: {}", worker_count, slots.len());
 

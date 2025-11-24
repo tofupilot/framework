@@ -22,9 +22,17 @@ setup:
 - name: Initialisation EtherCAT2
   python: phases.check_hall_sensors
   description: Détection de l'interface EtherCAT et démarrage des services HAL
+  ui:
+    components:
+    - type: text_input
+      key: text_input
+      required: false
+      trim: true
+      options: []
 
 main:
-- name: Contrôle Moteurs Doigts
+- key: controle_moteurs_doigts
+  name: Contrôle Moteurs Doigts werwer.
   python: phases/inspect_finger_motors
   description: Vérification visuelle du mouvement des doigts2
   measurements:
@@ -210,3 +218,15 @@ main:
     description: Capteur bas - Diminution intensité lumineuse avec poignée
   depends_on:
   - test_capteurs_hall
+
+teardown:
+- key: phase_1
+  name: New Phase 1
+  ui:
+    components:
+    - type: textarea
+      key: component_1763746248381
+      required: true
+      trim: true
+      rows: 1
+      options: []

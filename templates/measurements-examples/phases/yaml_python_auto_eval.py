@@ -15,7 +15,7 @@ def test_auto_evaluation(phase, test_api, ui):
     # ✅ Correct: YAML defines all specs, Python provides computed aggregation value
     # The validator (>= 3.0) and aggregation validator (> 3.1) are defined in YAML only
     aggregation_value = [
-        Aggregation(aggregation_type='mean', value=mean_voltage)  # YAML defines type/unit, Python provides value
+        Aggregation(type='mean', value=mean_voltage)  # YAML defines type/unit, Python provides value
     ]
 
     test_api.measurements.auto_eval_measurement = primary_voltage, aggregations=aggregation_value

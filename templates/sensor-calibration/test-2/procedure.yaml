@@ -69,7 +69,7 @@ main:
       expected_value: '[ON, OFF]'
   ui:
     components:
-    - type: dropdown
+    - type: select
       key: dropdown
       options: []
     - type: number_input

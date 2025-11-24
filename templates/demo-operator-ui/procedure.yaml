@@ -30,7 +30,7 @@ main:
         label: Option B
       - value: c
         label: Option C
-    - type: dropdown
+    - type: select
       key: dropdown_demo
       label: Single Dropdown
       placeholder: Select one option
@@ -43,7 +43,7 @@ main:
         label: Second Option
       - value: opt3
         label: Third Option
-    - type: multidropdown
+    - type: multiselect
       key: multidropdown_demo
       label: Multi Dropdown
       placeholder: Select multiple options

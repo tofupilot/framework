@@ -195,11 +195,13 @@ pub struct ProcedureYaml {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
 
+    #[serde(deserialize_with = "serde_trim::string_trim")]
     pub name: String,
 
+    #[serde(deserialize_with = "serde_trim::string_trim")]
     pub version: String,
 
-    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[serde(default, skip_serializing_if = "String::is_empty", deserialize_with = "serde_trim::string_trim")]
     pub description: String,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -477,11 +479,12 @@ pub struct ThenConfig {
 pub struct PlugDefinitionYaml {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key: Option<String>,
+    #[serde(deserialize_with = "serde_trim::string_trim")]
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scope: Option<Scope>,
     pub python: PythonSpec,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[serde(default, skip_serializing_if = "String::is_empty", deserialize_with = "serde_trim::string_trim")]
     pub description: String,
 }
 
@@ -690,6 +693,7 @@ pub struct ExecutableConfig {
 pub struct PhaseDefinitionYaml {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key: Option<String>,
+    #[serde(deserialize_with = "serde_trim::string_trim")]
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scope: Option<Scope>,
@@ -697,7 +701,7 @@ pub struct PhaseDefinitionYaml {
     pub python: Option<PythonSpec>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub executable: Option<ExecutableConfig>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "serde_trim::option_string_trim")]
     pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub measurements: Vec<MeasurementSpecYaml>,
@@ -995,10 +999,10 @@ pub enum TextColor {
     Orange,
     Yellow,
     Green,
-    Emerald,
-    Cyan,
+    Lime,
+    Sky,
     Blue,
-    Indigo,
+    Violet,
     Purple,
     Pink,
 }
@@ -1065,12 +1069,13 @@ pub enum AggregationValue {
 
 #[derive(Debug, Deserialize, Serialize, Clone, specta::Type)]
 pub struct AggregationSpec {
+    #[serde(rename = "type")]
     pub aggregation_type: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outcome: Option<ValidatorOutcome>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub value: Option<AggregationValue>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "serde_trim::option_string_trim")]
     pub unit: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub validators: Option<Vec<ValidatorSpec>>,
@@ -1087,15 +1092,15 @@ pub enum AxisData {
 pub struct AxisSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub data: Option<AxisData>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "serde_trim::option_string_trim")]
     pub unit: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "serde_trim::option_string_trim")]
     pub legend: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub aggregations: Option<Vec<AggregationSpec>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub validators: Option<Vec<ValidatorSpec>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "serde_trim::option_string_trim")]
     pub description: Option<String>,
 }
 
@@ -1103,7 +1108,7 @@ pub struct AxisSpec {
 pub struct MultiDimensionalSpec {
     pub x_axis: AxisSpec,
     pub y_axis: Vec<AxisSpec>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "serde_trim::option_string_trim")]
     pub title: Option<String>,
 }
 
@@ -1113,18 +1118,19 @@ pub struct MultiDimensionalSpec {
 pub struct MeasurementSpecYaml {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key: Option<String>,
+    #[serde(deserialize_with = "serde_trim::string_trim")]
     pub name: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "serde_trim::option_string_trim")]
     pub unit: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub validators: Option<Vec<ValidatorSpec>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub aggregations: Option<Vec<AggregationSpec>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "serde_trim::option_string_trim")]
     pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub multi_dimensional: Option<MultiDimensionalSpec>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "serde_trim::option_string_trim")]
     pub title: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub x_axis: Option<AxisSpec>,
@@ -1172,13 +1178,19 @@ pub struct MeasurementSpec {
 
 impl From<MeasurementSpecYaml> for MeasurementSpec {
     fn from(yaml: MeasurementSpecYaml) -> Self {
+        let trimmed = yaml.name.trim();
+        let name = if trimmed.is_empty() {
+            yaml.name
+        } else {
+            trimmed.to_string()
+        };
         let key = yaml.key.unwrap_or_else(|| {
-            crate::python::identifier::to_python_identifier(&yaml.name)
+            crate::python::identifier::to_python_identifier(&name)
         });
 
         MeasurementSpec {
             key,
-            name: yaml.name,
+            name,
             unit: yaml.unit,
             validators: yaml.validators,
             aggregations: yaml.aggregations,
@@ -1246,11 +1258,11 @@ pub struct UIComponentYaml {
     key: Option<String>,
 
     // Display/UI
-    #[serde(default)]
+    #[serde(default, deserialize_with = "serde_trim::option_string_trim")]
     label: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "serde_trim::option_string_trim")]
     description: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "serde_trim::option_string_trim")]
     placeholder: Option<String>,
 
     // Behavior
@@ -1268,12 +1280,16 @@ pub struct UIComponentYaml {
     max_length: Option<u32>,
     #[serde(default)]
     pattern: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "serde_trim::option_string_trim")]
     prefix: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "serde_trim::option_string_trim")]
     suffix: Option<String>,
     #[serde(default = "default_true")]
     trim: bool,
+
+    // Textarea-specific
+    #[serde(default)]
+    rows: Option<u32>,
 
     // Number Constraints
     #[serde(default)]
@@ -1334,6 +1350,7 @@ impl From<UIComponentYaml> for UIComponent {
             prefix: yaml.prefix,
             suffix: yaml.suffix,
             trim: yaml.trim,
+            rows: yaml.rows,
 
             // Number Constraints
             min: yaml.min,
@@ -1364,8 +1381,8 @@ pub enum UIComponentType {
     Switch,
     Textarea,
     Radio,
-    Dropdown,
-    Multidropdown,
+    Select,
+    Multiselect,
     Checklist,
     Slider,
     Text,
@@ -1426,6 +1443,10 @@ pub struct UIComponent {
     #[serde(default = "default_true")]
     pub trim: bool,
 
+    // Textarea-specific
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rows: Option<u32>,
+
     // Number Constraints
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub min: Option<f64>,
@@ -1483,6 +1504,7 @@ impl UIComponent {
             prefix: self.prefix.clone(),
             suffix: self.suffix.clone(),
             trim: self.trim,
+            rows: self.rows,
             min: self.min,
             max: self.max,
             step: self.step,
@@ -1511,15 +1533,147 @@ impl<'de> Deserialize<'de> for UIComponent {
 #[derive(Debug, Deserialize, Serialize, Validate, Clone, specta::Type)]
 pub struct SelectOption {
     #[validate(length(max = 200))]
+    #[serde(deserialize_with = "serde_trim::string_trim")]
     pub value: String,
     #[validate(length(max = 200))]
+    #[serde(deserialize_with = "serde_trim::string_trim")]
     pub label: String,
 }
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
     fn test_ts_export() {
         assert!(true);
+    }
+
+    #[test]
+    fn test_parse_duration_seconds() {
+        assert_eq!(parse_duration("30s").unwrap(), 30_000);
+        assert_eq!(parse_duration("1s").unwrap(), 1_000);
+        assert_eq!(parse_duration("90s").unwrap(), 90_000);
+    }
+
+    #[test]
+    fn test_parse_duration_minutes() {
+        assert_eq!(parse_duration("5m").unwrap(), 300_000);
+        assert_eq!(parse_duration("1m").unwrap(), 60_000);
+        assert_eq!(parse_duration("10m").unwrap(), 600_000);
+    }
+
+    #[test]
+    fn test_parse_duration_hours() {
+        assert_eq!(parse_duration("1h").unwrap(), 3_600_000);
+        assert_eq!(parse_duration("2h").unwrap(), 7_200_000);
+    }
+
+    #[test]
+    fn test_parse_duration_milliseconds() {
+        assert_eq!(parse_duration("500ms").unwrap(), 500);
+        assert_eq!(parse_duration("1000ms").unwrap(), 1_000);
+        assert_eq!(parse_duration("100ms").unwrap(), 100);
+    }
+
+    #[test]
+    fn test_parse_duration_combined() {
+        assert_eq!(parse_duration("1h30m").unwrap(), 5_400_000);
+        assert_eq!(parse_duration("2h15m30s").unwrap(), 8_130_000);
+        assert_eq!(parse_duration("1m30s").unwrap(), 90_000);
+        assert_eq!(parse_duration("1h500ms").unwrap(), 3_600_500);
+    }
+
+    #[test]
+    fn test_parse_duration_with_whitespace() {
+        assert_eq!(parse_duration("  30s  ").unwrap(), 30_000);
+        assert_eq!(parse_duration("5m ").unwrap(), 300_000);
+    }
+
+    #[test]
+    fn test_parse_duration_invalid_no_unit() {
+        let result = parse_duration("30");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("missing a unit"));
+    }
+
+    #[test]
+    fn test_parse_duration_invalid_zero() {
+        let result = parse_duration("0s");
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "Duration cannot be zero");
+    }
+
+    #[test]
+    fn test_parse_duration_invalid_character() {
+        let result = parse_duration("30x");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Invalid character"));
+    }
+
+    #[test]
+    fn test_parse_duration_empty() {
+        let result = parse_duration("");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_format_duration_milliseconds() {
+        assert_eq!(format_duration(500), "500ms");
+        assert_eq!(format_duration(999), "999ms");
+    }
+
+    #[test]
+    fn test_format_duration_seconds() {
+        assert_eq!(format_duration(1_000), "1s");
+        assert_eq!(format_duration(30_000), "30s");
+    }
+
+    #[test]
+    fn test_format_duration_minutes() {
+        assert_eq!(format_duration(60_000), "1m");
+        assert_eq!(format_duration(300_000), "5m");
+    }
+
+    #[test]
+    fn test_format_duration_hours() {
+        assert_eq!(format_duration(3_600_000), "1h");
+        assert_eq!(format_duration(7_200_000), "2h");
+    }
+
+    #[test]
+    fn test_format_duration_combined() {
+        assert_eq!(format_duration(5_400_000), "1h30m");
+        assert_eq!(format_duration(90_000), "1m30s");
+        assert_eq!(format_duration(3_661_000), "1h1m1s");
+        assert_eq!(format_duration(3_600_500), "1h500ms");
+    }
+
+    #[test]
+    fn test_duration_roundtrip() {
+        let inputs = vec!["30s", "5m", "1h", "1h30m", "500ms", "2h15m30s"];
+
+        for input in inputs {
+            let parsed = parse_duration(input).unwrap();
+            let formatted = format_duration(parsed);
+            let reparsed = parse_duration(&formatted).unwrap();
+            assert_eq!(parsed, reparsed, "Roundtrip failed for input: {}", input);
+        }
+    }
+
+    #[test]
+    fn test_validate_python_identifier_valid() {
+        assert!(validate_python_identifier("valid_name").is_ok());
+        assert!(validate_python_identifier("test123").is_ok());
+        assert!(validate_python_identifier("_private").is_ok());
+        assert!(validate_python_identifier("CamelCase").is_ok());
+    }
+
+    #[test]
+    fn test_validate_python_identifier_invalid() {
+        assert!(validate_python_identifier("123invalid").is_err());
+        assert!(validate_python_identifier("invalid-name").is_err());
+        assert!(validate_python_identifier("invalid name").is_err());
+        assert!(validate_python_identifier("").is_err());
     }
 }

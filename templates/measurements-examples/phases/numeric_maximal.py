@@ -18,13 +18,13 @@ def test_maximal_numeric(phase, test_api, ui):
 
     # ✅ Correct: YAML defines aggregation types/units, Python provides computed values
     aggregation_values = [
-        Aggregation(aggregation_type='mean', value=mean_voltage, outcome="PASS",
+        Aggregation(type='mean', value=mean_voltage, outcome="PASS",
                    validators=[
                        # Outcome for YAML-defined aggregation validator
                        Validator(level="alert", operator=">", outcome="PASS")
                    ]),
-        Aggregation(aggregation_type='std_dev', value=std_dev, outcome="PASS"),
-        Aggregation(aggregation_type='range', value=voltage_range, outcome="PASS")
+        Aggregation(type='std_dev', value=std_dev, outcome="PASS"),
+        Aggregation(type='range', value=voltage_range, outcome="PASS")
     ]
 
     test_api.measurements.maximal_voltage = primary_voltage, aggregations=aggregation_values

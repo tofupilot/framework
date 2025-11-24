@@ -178,7 +178,7 @@ main:
               value: dropdown3
           placeholder: ""
           required: false
-          type: dropdown
+          type: select
         - bind: measurements.test_multidropdown
           key: test_multidropdown
           label: multidropdown component
@@ -192,6 +192,6 @@ main:
               value: multidropdown3
           placeholder: ""
           required: false
-          type: multidropdown
+          type: multiselect
           default_value: ""
 

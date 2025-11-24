@@ -81,7 +81,7 @@ main:
   name: New Phase 6
   ui:
     components:
-    - type: dropdown
+    - type: select
       key: dropdown
       label: 'Dropdown info:'
       required: true
@@ -102,7 +102,7 @@ main:
   name: New Phase 7
   ui:
     components:
-    - type: multidropdown
+    - type: multiselect
       key: multidropdown
       label: 'Multi drop:'
       required: true

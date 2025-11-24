@@ -71,16 +71,16 @@ def test_maximal_multidim(phase, test_api, ui):
         aggregations=[
             # ⚠️ Note: Multidimensional axis aggregations - using constrained format
             Aggregation(
-                aggregation_type="forward_voltage",
+                type="forward_voltage",
                 value=forward_voltage,
                 validators=[
                     # ⚠️ Axis aggregation validator - outcome only (specs should be in YAML)
                     Validator(level="alert", operator=">", outcome="PASS")
                 ],
             ),
-            Aggregation(aggregation_type="reverse_current", value=reverse_current),
+            Aggregation(type="reverse_current", value=reverse_current),
             Aggregation(
-                aggregation_type="dynamic_resistance", value=dynamic_resistance
+                type="dynamic_resistance", value=dynamic_resistance
             ),
         ],
     )
