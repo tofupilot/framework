@@ -1,6 +1,6 @@
 name: Plugs Basic
 version: 1.0.0
-description: Shows equipment plugs for persistent resources
+description: Shows plugs for persistent resources
 
 plugs:
 - name: Power Supply
