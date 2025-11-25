@@ -1,5 +1,6 @@
 # Phases Parallel
 
+![6-phases-parallel](cover.png)
 Run independent test phases simultaneously.
 
 ## What You'll Learn

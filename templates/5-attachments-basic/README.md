@@ -1,5 +1,6 @@
 # Attachments Basic
 
+![5-attachments-basic](cover.png)
 Attach files and data to test reports.
 
 ## What You'll Learn

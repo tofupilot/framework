@@ -1,5 +1,6 @@
 # Plugs Basic
 
+![4-plugs-basic](cover.png)
 Persistent resources like test instruments.
 
 ## What You'll Learn

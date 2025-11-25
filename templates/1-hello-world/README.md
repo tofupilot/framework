@@ -1,5 +1,7 @@
 # Hello World
 
+![Hello World](cover.png)
+
 Simplest procedure showing basic structure.
 
 ## What You'll Learn

@@ -1,5 +1,6 @@
 # Measurements Basic
 
+![2-measurements-basic](cover.png)
 Capture and validate with pass/fail criteria.
 
 ## What You'll Learn

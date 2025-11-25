@@ -1,5 +1,6 @@
 # Operator UI Basic
 
+![3-operator-ui-basic](cover.png)
 Interactive interfaces with input and display.
 
 ## What You'll Learn
