@@ -1,0 +1,50 @@
+name: Phases Parallel
+version: 1.0.0
+description: Shows parallel phases running independently
+
+main:
+  - key: initialize
+    name: Initialize
+    python: phases.initialize
+    description: Setup before parallel tests
+
+  - key: voltage_test
+    name: Voltage Test
+    python: phases.voltage_test
+    description: Test voltage levels independently
+    depends_on:
+      - initialize
+    measurements:
+      - name: Supply Voltage
+        unit: V
+        validators:
+          - operator: ">="
+            expected_value: 4.8
+          - operator: "<="
+            expected_value: 5.2
+
+  - key: current_test
+    name: Current Test
+    python: phases.current_test
+    description: Test current draw independently
+    depends_on:
+      - initialize
+    measurements:
+      - name: Supply Current
+        unit: mA
+        validators:
+          - operator: "<="
+            expected_value: 500
+
+  - key: temperature_test
+    name: Temperature Test
+    python: phases.temperature_test
+    description: Monitor temperature independently
+    depends_on:
+      - initialize
+    measurements:
+      - name: Board Temperature
+        unit: °C
+        validators:
+          - operator: "<="
+            expected_value: 45

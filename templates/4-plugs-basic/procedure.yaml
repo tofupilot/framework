@@ -1,0 +1,26 @@
+name: Plugs Basic
+version: 1.0.0
+description: Shows equipment plugs for persistent resources
+
+plugs:
+- name: Power Supply
+  python: instruments.power_supply:PowerSupply
+  description: Mock programmable power supply
+
+main:
+- name: Set Voltage
+  python: phases.set_voltage:set_voltage
+  description: Configure power supply voltage
+- name: Measure Output
+  python: phases.measure_output
+  description: Read voltage from power supply
+  measurements:
+  - name: Output Voltage
+    unit: V
+    validators:
+    - operator: '>='
+      expected_value: 4.9
+    - operator: <=
+      expected_value: 5.1
+  depends_on:
+  - set_voltage

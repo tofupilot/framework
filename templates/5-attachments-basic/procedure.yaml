@@ -1,0 +1,16 @@
+name: Attachments Basic
+version: 1.0.0
+description: Shows attaching files and data to test reports
+
+main:
+  - key: collect_data
+    name: Collect Data
+    python: phases.collect_data
+    description: Generate test data and attach as JSON
+
+  - key: capture_logs
+    name: Capture Logs
+    python: phases.capture_logs
+    description: Attach log files to report
+    depends_on:
+      - collect_data

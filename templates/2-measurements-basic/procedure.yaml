@@ -1,0 +1,32 @@
+name: Measurements Basic
+version: 1.0.0
+description: Shows measurements with validators for pass/fail testing
+
+main:
+  - key: measure_voltage
+    name: Measure Voltage
+    python: phases.measure_voltage
+    description: Measure voltage and validate against limits
+    measurements:
+      - name: Output Voltage
+        unit: V
+        validators:
+          - operator: ">="
+            expected_value: 4.8
+          - operator: "<="
+            expected_value: 5.2
+
+  - key: measure_temperature
+    name: Measure Temperature
+    python: phases.measure_temperature
+    description: Measure temperature and validate range
+    depends_on:
+      - measure_voltage
+    measurements:
+      - name: Ambient Temperature
+        unit: °C
+        validators:
+          - operator: ">="
+            expected_value: 20.0
+          - operator: "<="
+            expected_value: 30.0

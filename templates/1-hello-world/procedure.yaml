@@ -1,0 +1,8 @@
+name: Hello World
+version: 1.0.0
+description: Absolute minimal example showing basic procedure structure
+
+main:
+  - name: Hello World
+    python: phases.hello_world
+    description: Simple phase that prints a message
