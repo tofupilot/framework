@@ -9,16 +9,16 @@ fn main() {
     if args.len() > 1 {
         match args[1].as_str() {
             "run" => {
-                let procedure_path = tofupilot_lib::cli::parse_args();
-                tofupilot_lib::cli::run(procedure_path);
+                let procedure_path = tofupilot_studio_lib::cli::parse_args();
+                tofupilot_studio_lib::cli::run(procedure_path);
             }
             "help" => {
-                tofupilot_lib::cli::print_help(&args[0]);
+                tofupilot_studio_lib::cli::print_help(&args[0]);
                 std::process::exit(0);
             }
-            _ => tofupilot_lib::run(),
+            _ => tofupilot_studio_lib::run(),
         }
     } else {
-        tofupilot_lib::run();
+        tofupilot_studio_lib::run();
     }
 }
