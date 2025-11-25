@@ -1,7 +1,7 @@
 import sys
 import os
 import math
-def test_minimal_multidim(phase, test_api, ui):
+def test_minimal_multidim(phase, run, ui):
     """Simple linear XY curve (time vs voltage)"""
 
     # Generate simple time vs voltage curve
@@ -18,7 +18,7 @@ def test_minimal_multidim(phase, test_api, ui):
         y_axis=y_axis,
     )
 
-    test_api.measurements.time_voltage_curve = time_voltage_curve
-    test_api.log.info(f"Generated time-voltage curve with {len(time_points)} data points")
+    measurements.time_voltage_curve = time_voltage_curve
+    run.log.info(f"Generated time-voltage curve with {len(time_points)} data points")
 
     

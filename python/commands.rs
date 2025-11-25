@@ -165,7 +165,6 @@ if __name__ == '__main__':
 "#;
 
     let output = runtime::python::PythonCommandBuilderSync::new(&python_path)
-        .hide_window()
         .arg("-c")
         .arg(python_script)
         .arg(&file_path)

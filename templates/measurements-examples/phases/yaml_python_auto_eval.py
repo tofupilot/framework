@@ -2,7 +2,7 @@ import sys
 import os
 import random
 import statistics
-def test_auto_evaluation(phase, test_api, ui):
+def test_auto_evaluation(phase, run, ui):
     """Measurement with validator and aggregation - YAML defines all specs, Python provides values only"""
 
     # Generate multiple voltage readings for aggregation calculation
@@ -18,11 +18,11 @@ def test_auto_evaluation(phase, test_api, ui):
         Aggregation(type='mean', value=mean_voltage)  # YAML defines type/unit, Python provides value
     ]
 
-    test_api.measurements.auto_eval_measurement = primary_voltage, aggregations=aggregation_value
+    measurements.auto_eval_measurement = primary_voltage, aggregations=aggregation_value
 
-    test_api.log.info(f"Auto-evaluation measurement: {primary_voltage:.3f}V")
-    test_api.log.info(f"Mean aggregation: {mean_voltage:.3f}V")
-    test_api.log.info("✅ Validators and aggregation specs defined in YAML, auto-evaluated by system")
-    test_api.log.info("✅ Python provides only measurement value and computed aggregation value")
+    run.log.info(f"Auto-evaluation measurement: {primary_voltage:.3f}V")
+    run.log.info(f"Mean aggregation: {mean_voltage:.3f}V")
+    run.log.info("✅ Validators and aggregation specs defined in YAML, auto-evaluated by system")
+    run.log.info("✅ Python provides only measurement value and computed aggregation value")
 
     

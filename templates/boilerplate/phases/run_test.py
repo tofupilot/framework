@@ -1,6 +1,5 @@
 import sys
 
 
-def run_test(run, ui):
+def run_test(ui):
     print("Running test...", file=sys.stderr)
-    return "CONTINUE"

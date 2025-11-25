@@ -602,7 +602,6 @@ impl Worker {
                 std::process::Stdio::piped(),
                 std::process::Stdio::piped(),
             )
-            .hide_window()
             .spawn()
             .map_err(|e| {
                 if e.kind() == std::io::ErrorKind::NotFound {

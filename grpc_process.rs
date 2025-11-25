@@ -30,7 +30,6 @@ impl<C> GrpcProcess<C> {
         let mut cmd = crate::execution::runtime::python::PythonCommandBuilder::new(python_path)
             .unbuffered()
             .with_stdio(Stdio::null(), Stdio::piped(), Stdio::piped())
-            .hide_window()
             .arg(&script_path);
 
         for arg in args {

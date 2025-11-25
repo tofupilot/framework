@@ -2,7 +2,7 @@ import time
 import sys
 
 
-def setup_all(test_api, ui):
+def setup_all(run, ui):
     """Setup procedure - initialize the test system"""
     print("🚀 [SETUP_PROCEDURE] Initializing test system...", file=sys.stderr)
     print("   - Starting test equipment", file=sys.stderr)

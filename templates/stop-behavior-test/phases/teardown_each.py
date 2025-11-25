@@ -2,7 +2,7 @@ import time
 import sys
 
 
-def teardown_each(test_api, ui):
+def teardown_each(run, ui):
     """Cleanup slot - clean up after each unit (SHOULD RUN EVEN WHEN STOPPED)"""
     print("🧹 [CLEANUP_SLOT] Finalizing unit test...", file=sys.stderr)
     print("   - Saving test data", file=sys.stderr)

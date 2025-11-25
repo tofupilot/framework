@@ -14,7 +14,7 @@ def signal_handler(signum, frame):
     stop_requested = True
 
 
-def setup_procedure(test_api, ui):
+def setup_procedure(run, ui):
     """Setup procedure - initialize the test system"""
     print("🚀 [SETUP_PROCEDURE] Initializing test system...", file=sys.stderr)
     print("   - Starting test equipment", file=sys.stderr)
@@ -23,7 +23,7 @@ def setup_procedure(test_api, ui):
     print("✅ [SETUP_PROCEDURE] Test system initialized", file=sys.stderr)
 
 
-def setup_slot(test_api, ui):
+def setup_slot(run, ui):
     """Setup slot - prepare each unit for testing"""
     print("🔧 [SETUP_SLOT] Preparing unit for test...", file=sys.stderr)
     print("   - Connecting to unit", file=sys.stderr)
@@ -32,7 +32,7 @@ def setup_slot(test_api, ui):
     print("✅ [SETUP_SLOT] Unit preparation complete", file=sys.stderr)
 
 
-def cleanup_slot(test_api, ui):
+def cleanup_slot(run, ui):
     """Cleanup slot - clean up after each unit (SHOULD RUN EVEN WHEN STOPPED)"""
     print("🧹 [CLEANUP_SLOT] Finalizing unit test...", file=sys.stderr)
     print("   - Saving test data", file=sys.stderr)
@@ -42,7 +42,7 @@ def cleanup_slot(test_api, ui):
     print("✅ [CLEANUP_SLOT] Unit test finalized", file=sys.stderr)
 
 
-def cleanup_procedure(test_api, ui):
+def cleanup_procedure(run, ui):
     """Cleanup procedure - shutdown test system (SHOULD RUN EVEN WHEN STOPPED)"""
     print("🛑 [CLEANUP_PROCEDURE] Shutting down test system...", file=sys.stderr)
     print("   - Saving session data", file=sys.stderr)
@@ -52,14 +52,14 @@ def cleanup_procedure(test_api, ui):
     print("✅ [CLEANUP_PROCEDURE] Test system shutdown complete", file=sys.stderr)
 
 
-def quick_phase(test_api, ui):
+def quick_phase(run, ui):
     """Quick phase that completes in 1 second"""
     print("[Quick Phase] Starting (1 second)")
     time.sleep(1)
     print("[Quick Phase] Completed")
 
 
-def slow_with_signal_handler(test_api, ui):
+def slow_with_signal_handler(run, ui):
     """Slow phase that handles SIGTERM gracefully - THIS IS THE CORRECT PATTERN"""
     global stop_requested
     stop_requested = False
@@ -82,7 +82,7 @@ def slow_with_signal_handler(test_api, ui):
     print("[Slow With Signal] Completed all 30 iterations")
 
 
-def normal_phase(test_api, ui):
+def normal_phase(run, ui):
     """Normal phase that takes 5 seconds"""
     print("[Normal Phase] Starting (5 seconds)")
     for i in range(5):
@@ -91,7 +91,7 @@ def normal_phase(test_api, ui):
     print("[Normal Phase] Completed")
 
 
-def blocking_sleep_phase(test_api, ui):
+def blocking_sleep_phase(run, ui):
     """Long sleep without signal handling - will not respond to SIGTERM gracefully"""
     print("[Blocking Sleep] Starting 60 second sleep WITHOUT signal handling")
     print(
@@ -101,7 +101,7 @@ def blocking_sleep_phase(test_api, ui):
     print("[Blocking Sleep] Completed (this shouldn't print if stopped)")
 
 
-def cpu_loop_phase(test_api, ui):
+def cpu_loop_phase(run, ui):
     """Tight CPU loop without signal checks - will not respond to SIGTERM"""
     print("[CPU Loop] Starting CPU-intensive calculation")
     print("[CPU Loop] Try stopping this - it won't respond until loop completes")
@@ -111,19 +111,19 @@ def cpu_loop_phase(test_api, ui):
     print(f"[CPU Loop] Completed with result={result}")
 
 
-def blocking_input_phase(test_api, ui):
+def blocking_input_phase(run, ui):
     """Waiting for stdin input - will block on input()"""
     print("[Blocking Input] Waiting for user input from stdin")
     print("[Blocking Input] Try stopping this - input() blocks SIGTERM")
     try:
         response = input("Enter value: ")
-        test_api.measurements.input_length = len(response)
+        measurements.input_length = len(response)
         print(f"[Blocking Input] Received: {response}")
     except EOFError:
         print("[Blocking Input] Input interrupted")
 
 
-def network_io_phase(test_api, ui):
+def network_io_phase(run, ui):
     """Blocking network request - will block during HTTP request"""
     print("[Network I/O] Starting network request with 30 second delay")
     print("[Network I/O] Try stopping this - urlopen() blocks SIGTERM")
@@ -137,7 +137,7 @@ def network_io_phase(test_api, ui):
         print(f"[Network I/O] Error: {e}")
 
 
-def subprocess_blocking_phase(test_api, ui):
+def subprocess_blocking_phase(run, ui):
     """Spawned subprocess - parent blocks while subprocess runs"""
     print("[Subprocess] Spawning 'sleep 60' subprocess")
     print("[Subprocess] Try stopping this - subprocess.run() blocks parent")
@@ -148,7 +148,7 @@ def subprocess_blocking_phase(test_api, ui):
         print(f"[Subprocess] Error: {e}")
 
 
-def thread_wait_phase(test_api, ui):
+def thread_wait_phase(run, ui):
     """Thread synchronization wait - blocks on Event.wait()"""
     print("[Thread Wait] Starting thread event wait (60 seconds)")
     print("[Thread Wait] Try stopping this - Event.wait() blocks SIGTERM")
@@ -160,7 +160,7 @@ def thread_wait_phase(test_api, ui):
         print("[Thread Wait] Timeout reached")
 
 
-def socket_server_phase(test_api, ui):
+def socket_server_phase(run, ui):
     """TCP socket waiting for connection - blocks on accept()"""
     print("[Socket Server] Creating TCP socket and waiting for connection")
     print("[Socket Server] Try stopping this - socket.accept() blocks SIGTERM")
@@ -178,7 +178,7 @@ def socket_server_phase(test_api, ui):
         print(f"[Socket Server] Error: {e}")
 
 
-def database_query_phase(test_api, ui):
+def database_query_phase(run, ui):
     """Long-running database operation"""
     print("[Database Query] Starting long-running SQLite query")
     print("[Database Query] Try stopping this - database query blocks SIGTERM")
@@ -197,7 +197,7 @@ def database_query_phase(test_api, ui):
         print(f"[Database Query] Error: {e}")
 
 
-def file_io_large_phase(test_api, ui):
+def file_io_large_phase(run, ui):
     """Large file I/O operation"""
     print("[File I/O] Reading large amount of data from /dev/zero")
     print("[File I/O] Try stopping this - file read() blocks SIGTERM")
@@ -209,7 +209,7 @@ def file_io_large_phase(test_api, ui):
         print(f"[File I/O] Error: {e}")
 
 
-def spawn_zombies_phase(test_api, ui):
+def spawn_zombies_phase(run, ui):
     """Spawn multiple child processes to test zombie cleanup"""
     print("[Spawn Zombies] Creating 3 long-running child processes")
     print("[Spawn Zombies] These should be cleaned up automatically when worker exits")

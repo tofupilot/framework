@@ -118,7 +118,6 @@ print(json.dumps(results))
 
     // Run Python script
     if let Ok(output) = crate::execution::runtime::python::PythonCommandBuilderSync::new(&python_path)
-        .hide_window()
         .arg("-c")
         .arg(python_script)
         .arg(serde_json::to_string(&modules_to_check).unwrap_or_default())

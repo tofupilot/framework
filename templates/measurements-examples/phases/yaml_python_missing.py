@@ -1,9 +1,9 @@
-def test_missing_values_outcomes(phase, test_api, ui):
+def test_missing_values_outcomes(phase, run, ui):
     """YAML declares structure, Python may provide values"""
 
-    test_api.measurements.missing_measurement = 2.5
+    measurements.missing_measurement = 2.5
 
-    test_api.log.info("Missing measurement: YAML defines structure")
-    test_api.log.info("Python provides measurement value")
+    run.log.info("Missing measurement: YAML defines structure")
+    run.log.info("Python provides measurement value")
 
     

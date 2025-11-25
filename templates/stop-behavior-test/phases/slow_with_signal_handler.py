@@ -10,7 +10,7 @@ def signal_handler(signum, frame):
     stop_requested = True
 
 
-def slow_with_signal_handler(test_api, ui):
+def slow_with_signal_handler(run, ui):
     """Slow phase that handles SIGTERM gracefully - THIS IS THE CORRECT PATTERN"""
     global stop_requested
     stop_requested = False

@@ -2,7 +2,7 @@ import sys
 import os
 import random
 import statistics
-def test_maximal_numeric(phase, test_api, ui):
+def test_maximal_numeric(phase, run, ui):
     """Voltage with range validators, statistical aggregations - YAML defines specs, Python provides values"""
 
     # Generate multiple voltage readings for statistical analysis
@@ -27,11 +27,11 @@ def test_maximal_numeric(phase, test_api, ui):
         Aggregation(type='range', value=voltage_range, outcome="PASS")
     ]
 
-    test_api.measurements.maximal_voltage = primary_voltage, aggregations=aggregation_values
+    measurements.maximal_voltage = primary_voltage, aggregations=aggregation_values
 
-    test_api.log.info(f"Primary voltage: {primary_voltage:.4f}V")
-    test_api.log.info(f"Mean voltage: {mean_voltage:.4f}V")
-    test_api.log.info(f"Standard deviation: {std_dev:.4f}V")
-    test_api.log.info(f"Range: {voltage_range:.4f}V")
+    run.log.info(f"Primary voltage: {primary_voltage:.4f}V")
+    run.log.info(f"Mean voltage: {mean_voltage:.4f}V")
+    run.log.info(f"Standard deviation: {std_dev:.4f}V")
+    run.log.info(f"Range: {voltage_range:.4f}V")
 
     

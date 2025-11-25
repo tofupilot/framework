@@ -77,12 +77,6 @@ impl PythonCommandBuilder {
         self
     }
 
-    /// Hide console window on Windows
-    pub fn hide_window(mut self) -> Self {
-        crate::execution::runtime::process::configure_no_window_tokio(&mut self.cmd);
-        self
-    }
-
     /// Build the final Command, ready to spawn
     pub fn build(self) -> tokio::process::Command {
         self.cmd
@@ -92,7 +86,17 @@ impl PythonCommandBuilder {
     /// Returns AsyncGroupChild which wraps tokio::process::Child
     /// Process groups are always enabled for proper cleanup
     pub fn spawn(mut self) -> std::io::Result<AsyncGroupChild> {
-        self.cmd.group_spawn()
+        #[cfg(windows)]
+        {
+            const CREATE_NO_WINDOW: u32 = 0x08000000;
+            let mut group = self.cmd.group();
+            group.creation_flags(CREATE_NO_WINDOW);
+            group.spawn()
+        }
+        #[cfg(not(windows))]
+        {
+            self.cmd.group_spawn()
+        }
     }
 }
 
@@ -132,12 +136,6 @@ impl PythonCommandBuilderSync {
     /// Add a single command line argument
     pub fn arg<S: AsRef<std::ffi::OsStr>>(mut self, arg: S) -> Self {
         self.cmd.arg(arg);
-        self
-    }
-
-    /// Hide console window on Windows
-    pub fn hide_window(mut self) -> Self {
-        crate::execution::runtime::process::configure_no_window(&mut self.cmd);
         self
     }
 

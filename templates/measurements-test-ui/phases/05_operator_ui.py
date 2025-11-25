@@ -7,7 +7,7 @@ sys.path.append(
 )
 
 
-def python_bound_ui(phase, test_api, ui):
-    test_api.measurements.humidity = 42
+def python_bound_ui(phase, run, ui):
+    measurements.humidity = 42
 
     

@@ -1,7 +1,7 @@
 import sys
 import os
 import random
-def test_maximal_boolean(phase, test_api, ui):
+def test_maximal_boolean(phase, run, ui):
     """Power status with equality validator, test statistics aggregations, and count validator"""
 
     # Simulate multiple test runs for statistics
@@ -15,10 +15,10 @@ def test_maximal_boolean(phase, test_api, ui):
     # Primary power status measurement
     primary_status = test_results[0]  # First result
 
-    test_api.measurements.maximal_power_status = primary_status
+    measurements.maximal_power_status = primary_status
 
-    test_api.log.info(f"Primary power status: {primary_status}")
-    test_api.log.info(f"Pass count: {pass_count}/{total_count}")
-    test_api.log.info(f"Pass rate: {pass_rate:.1f}%")
+    run.log.info(f"Primary power status: {primary_status}")
+    run.log.info(f"Pass count: {pass_count}/{total_count}")
+    run.log.info(f"Pass rate: {pass_rate:.1f}%")
 
     

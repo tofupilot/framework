@@ -6,8 +6,8 @@ import time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', 'src-tauri', 'python'))
 
 
-def measurement_validation_fail(phase, test_api, ui):
+def measurement_validation_fail(phase, run, ui):
     """Returns CONTINUE but measurement fails critical validator → outcome is FAIL."""
     time.sleep(0.25)
-    test_api.measurements.voltage = 2.5
+    measurements.voltage = 2.5
     

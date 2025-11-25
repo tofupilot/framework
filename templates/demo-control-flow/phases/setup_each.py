@@ -9,4 +9,3 @@ def setup_each(test, ui):
     print("   - Setting initial conditions", file=sys.stderr)
     time.sleep(2)
     print("✅ Unit preparation complete", file=sys.stderr)
-    return "CONTINUE"

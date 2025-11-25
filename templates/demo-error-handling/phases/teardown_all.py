@@ -11,4 +11,3 @@ def teardown_all(test, ui):
     print("   - Cleaning up resources", file=sys.stderr)
     time.sleep(0.25)
     print("✅ Test system shutdown complete", file=sys.stderr)
-    return "CONTINUE"

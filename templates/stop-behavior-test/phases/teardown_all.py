@@ -2,7 +2,7 @@ import time
 import sys
 
 
-def teardown_all(test_api, ui):
+def teardown_all(run, ui):
     """Cleanup procedure - shutdown test system (SHOULD RUN EVEN WHEN STOPPED)"""
     print("🛑 [CLEANUP_PROCEDURE] Shutting down test system...", file=sys.stderr)
     print("   - Saving session data", file=sys.stderr)

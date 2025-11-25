@@ -11,4 +11,3 @@ def setup_all(test, ui):
     print("   - Loading configuration", file=sys.stderr)
     time.sleep(2)
     print("✅ Test system initialized successfully", file=sys.stderr)
-    return "CONTINUE"

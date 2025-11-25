@@ -1,7 +1,7 @@
 import sys
 import os
 import random
-def test_maximal_string(phase, test_api, ui):
+def test_maximal_string(phase, run, ui):
     """Version string with regex validator, count aggregations, and pattern validation"""
 
     # Generate version strings for aggregation
@@ -19,11 +19,11 @@ def test_maximal_string(phase, test_api, ui):
     total_count = len(version_strings)
     unique_count = len(set(version_strings))
 
-    test_api.measurements.version_string = primary_version
+    measurements.version_string = primary_version
 
-    test_api.log.info(f"Primary version: {primary_version}")
-    test_api.log.info(f"Total versions processed: {total_count}")
-    test_api.log.info(f"Unique versions: {unique_count}")
-    test_api.log.info(f"All versions: {version_strings}")
+    run.log.info(f"Primary version: {primary_version}")
+    run.log.info(f"Total versions processed: {total_count}")
+    run.log.info(f"Unique versions: {unique_count}")
+    run.log.info(f"All versions: {version_strings}")
 
     

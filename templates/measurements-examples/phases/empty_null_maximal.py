@@ -1,7 +1,7 @@
 import sys
 import os
 import random
-def test_maximal_empty_null(phase, test_api, ui):
+def test_maximal_empty_null(phase, run, ui):
     """Missing sensor with null validator, availability aggregations, and count validator"""
 
     # Simulate sensor readings over time - some may be null due to sensor failures
@@ -21,11 +21,11 @@ def test_maximal_empty_null(phase, test_api, ui):
     # Primary sensor reading (first reading, which may be null)
     primary_sensor_reading = sensor_readings[0]
 
-    test_api.measurements.missing_sensor = primary_sensor_reading
+    measurements.missing_sensor = primary_sensor_reading
 
-    test_api.log.info(f"Primary sensor reading: {primary_sensor_reading}")
-    test_api.log.info(f"Null readings: {null_count}/{total_count}")
-    test_api.log.info(f"Availability: {availability:.1f}%")
-    test_api.log.info(f"System status: {status}")
+    run.log.info(f"Primary sensor reading: {primary_sensor_reading}")
+    run.log.info(f"Null readings: {null_count}/{total_count}")
+    run.log.info(f"Availability: {availability:.1f}%")
+    run.log.info(f"System status: {status}")
 
     

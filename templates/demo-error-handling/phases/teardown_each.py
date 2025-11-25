@@ -11,4 +11,3 @@ def teardown_each(test, ui):
     print("   - Resetting for next unit", file=sys.stderr)
     time.sleep(0.25)
     print("✅ Unit test finalized", file=sys.stderr)
-    return "CONTINUE"

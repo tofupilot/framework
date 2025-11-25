@@ -270,7 +270,6 @@ async fn inspect_venv(
         let output = crate::execution::runtime::python::PythonCommandBuilderSync::new(
             &venv_info.python_path.to_string_lossy(),
         )
-        .hide_window()
         .arg("--version")
         .output()
         .ok()?;

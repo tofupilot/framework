@@ -6,7 +6,7 @@ import time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', 'src-tauri', 'python'))
 
 
-def return_fail(phase, test_api, ui):
+def return_fail(phase, run, ui):
     """Returns FAIL, outcome is FAIL (when.fail determines next action)."""
     time.sleep(0.25)
     phase.fail("Phase failed")

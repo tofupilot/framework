@@ -11,7 +11,6 @@ def setup_procedure(test, ui):
     print("   - Loading configuration", file=sys.stderr)
     time.sleep(2)
     print("✅ Test system initialized successfully", file=sys.stderr)
-    return "CONTINUE"
 
 def setup_slot(test, ui):
     """Setup slot - prepare each individual unit for testing"""
@@ -21,7 +20,6 @@ def setup_slot(test, ui):
     print("   - Setting initial conditions", file=sys.stderr)
     time.sleep(2)
     print("✅ Unit preparation complete", file=sys.stderr)
-    return "CONTINUE"
 
 def cleanup_slot(test, ui):
     """Cleanup slot - clean up after testing each unit"""
@@ -31,7 +29,6 @@ def cleanup_slot(test, ui):
     print("   - Resetting for next unit", file=sys.stderr)
     time.sleep(0.25)
     print("✅ Unit test finalized", file=sys.stderr)
-    return "CONTINUE"
 
 def cleanup_procedure(test, ui):
     """Cleanup procedure - shut down the entire test system once at end"""
@@ -41,4 +38,3 @@ def cleanup_procedure(test, ui):
     print("   - Cleaning up resources", file=sys.stderr)
     time.sleep(0.25)
     print("✅ Test system shutdown complete", file=sys.stderr)
-    return "CONTINUE"

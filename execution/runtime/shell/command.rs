@@ -88,20 +88,26 @@ impl ShellCommandBuilder {
         self
     }
 
-    /// Hide console window on Windows
-    pub fn hide_window(mut self) -> Self {
-        crate::execution::runtime::process::configure_no_window_tokio(&mut self.cmd);
-        self
-    }
-
     /// Build the final Command, ready to spawn
     pub fn build(self) -> tokio::process::Command {
         self.cmd
     }
 
     /// Convenience method: spawn the command immediately
-    pub fn spawn(mut self) -> std::io::Result<tokio::process::Child> {
-        self.cmd.spawn()
+    pub fn spawn(mut self) -> std::io::Result<command_group::AsyncGroupChild> {
+        #[cfg(windows)]
+        {
+            const CREATE_NO_WINDOW: u32 = 0x08000000;
+            use command_group::AsyncCommandGroup;
+            let mut group = self.cmd.group();
+            group.creation_flags(CREATE_NO_WINDOW);
+            group.spawn()
+        }
+        #[cfg(not(windows))]
+        {
+            use command_group::AsyncCommandGroup;
+            self.cmd.group_spawn()
+        }
     }
 
     /// Get the shell type being used

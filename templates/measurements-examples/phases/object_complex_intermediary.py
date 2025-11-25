@@ -4,7 +4,7 @@ import random
 import math
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', 'src-tauri', 'python'))
 
-def test_intermediary_object_complex(phase, test_api, ui):
+def test_intermediary_object_complex(phase, run, ui):
     """Calibration parameters object and sine waveform arrays with metadata"""
 
     # Calibration parameters object with nested structure
@@ -26,8 +26,8 @@ def test_intermediary_object_complex(phase, test_api, ui):
     }
 
     # ✅ Correct: Only provide value, YAML defines docstring and unit
-    test_api.measurements.calibration_params = calibration_params
-    test_api.log.info("Calibration parameters loaded with temperature compensation")
+    measurements.calibration_params = calibration_params
+    run.log.info("Calibration parameters loaded with temperature compensation")
 
     # Sine waveform arrays with metadata
     sample_rate = 1000  # Hz
@@ -47,7 +47,7 @@ def test_intermediary_object_complex(phase, test_api, ui):
     }
 
     # ✅ Correct: Only provide value, YAML defines docstring
-    test_api.measurements.sine_waveform = sine_waveform
-    test_api.log.info(f"Generated {frequency}Hz sine waveform with {len(time_array)} samples")
+    measurements.sine_waveform = sine_waveform
+    run.log.info(f"Generated {frequency}Hz sine waveform with {len(time_array)} samples")
 
     

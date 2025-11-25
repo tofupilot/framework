@@ -3,7 +3,7 @@ import os
 import random
 import math
 import statistics
-def test_maximal_object_complex(phase, test_api, ui):
+def test_maximal_object_complex(phase, run, ui):
     """System diagnostics with expression validator and noisy time series with signal analysis"""
 
     # Generate comprehensive system diagnostics
@@ -83,7 +83,7 @@ def test_maximal_object_complex(phase, test_api, ui):
     valid_fields = sum(1 for field in critical_fields if field is not None)
     data_integrity = (valid_fields / len(critical_fields)) * 100
 
-    test_api.measurements.system_diagnostics = system_diagnostics
+    measurements.system_diagnostics = system_diagnostics
 
     # Generate noisy time series for signal analysis
     sample_rate = 1000  # Hz
@@ -118,11 +118,11 @@ def test_maximal_object_complex(phase, test_api, ui):
     peak_to_peak = max(noisy_signal) - min(noisy_signal)
     dc_component = sum(noisy_signal) / len(noisy_signal)
 
-    test_api.measurements.noisy_time_series = noisy_time_series
+    measurements.noisy_time_series = noisy_time_series
 
-    test_api.log.info(f"System diagnostics: {field_count} fields, {nesting_depth} nesting levels")
-    test_api.log.info(f"Data integrity: {data_integrity:.1f}%")
-    test_api.log.info(f"Time series: {sample_count} samples, RMS={rms_amplitude:.3f}V")
-    test_api.log.info(f"Peak-to-peak: {peak_to_peak:.3f}V, DC component: {dc_component:.3f}V")
+    run.log.info(f"System diagnostics: {field_count} fields, {nesting_depth} nesting levels")
+    run.log.info(f"Data integrity: {data_integrity:.1f}%")
+    run.log.info(f"Time series: {sample_count} samples, RMS={rms_amplitude:.3f}V")
+    run.log.info(f"Peak-to-peak: {peak_to_peak:.3f}V, DC component: {dc_component:.3f}V")
 
     

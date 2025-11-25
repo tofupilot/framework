@@ -1,7 +1,7 @@
 import sys
 import os
 import math
-def test_maximal_multidim(phase, test_api, ui):
+def test_maximal_multidim(phase, run, ui):
     """Diode I-V curve with validators, aggregations, and aggregation validators"""
 
     # Generate diode I-V characteristic curve
@@ -91,11 +91,11 @@ def test_maximal_multidim(phase, test_api, ui):
         y_axis=[current_axis],
     )
 
-    test_api.measurements.diode_iv_curve = diode_iv_curve
+    measurements.diode_iv_curve = diode_iv_curve
 
-    test_api.log.info(f"Generated diode I-V curve with {len(voltages)} data points")
-    test_api.log.info(f"Forward voltage (@ 1mA): {forward_voltage:.3f}V")
-    test_api.log.info(f"Reverse current (@ -1V): {reverse_current:.2e}A")
-    test_api.log.info(f"Dynamic resistance: {dynamic_resistance:.1f}Ω")
+    run.log.info(f"Generated diode I-V curve with {len(voltages)} data points")
+    run.log.info(f"Forward voltage (@ 1mA): {forward_voltage:.3f}V")
+    run.log.info(f"Reverse current (@ -1V): {reverse_current:.2e}A")
+    run.log.info(f"Dynamic resistance: {dynamic_resistance:.1f}Ω")
 
     

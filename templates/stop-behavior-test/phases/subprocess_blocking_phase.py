@@ -1,7 +1,7 @@
 import subprocess
 
 
-def subprocess_blocking_phase(test_api, ui):
+def subprocess_blocking_phase(run, ui):
     """Spawned subprocess - parent blocks while subprocess runs"""
     print("[Subprocess] Spawning 'sleep 60' subprocess")
     print("[Subprocess] Try stopping this - subprocess.run() blocks parent")

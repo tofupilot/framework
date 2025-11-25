@@ -1,4 +1,4 @@
-def network_io_phase(test_api, ui):
+def network_io_phase(run, ui):
     """Blocking network request - will block during HTTP request"""
     print("[Network I/O] Starting network request with 30 second delay")
     print("[Network I/O] Try stopping this - urlopen() blocks SIGTERM")

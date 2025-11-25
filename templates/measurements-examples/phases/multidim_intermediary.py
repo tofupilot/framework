@@ -1,7 +1,7 @@
 import sys
 import os
 import math
-def test_intermediary_multidim(phase, test_api, ui):
+def test_intermediary_multidim(phase, run, ui):
     """Frequency response plot with axis metadata and docstrings"""
 
     # Generate frequency response data (logarithmic frequency sweep)
@@ -37,11 +37,11 @@ def test_intermediary_multidim(phase, test_api, ui):
         y_axis=[magnitude_axis, phase_axis],
     )
 
-    test_api.measurements.frequency_response = frequency_response
-    test_api.log.info(
+    measurements.frequency_response = frequency_response
+    run.log.info(
         f"Generated frequency response with {len(frequencies)} frequency points"
     )
-    test_api.log.info(
+    run.log.info(
         f"Frequency range: {frequencies[0]:.1f} Hz to {frequencies[-1]:.0f} Hz"
     )
 
