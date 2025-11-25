@@ -104,21 +104,21 @@ You can clone these templates from [**TofuPilot Studio**](https://www.tofupilot.
 <tr>
 <td>
 
-[<img src="../procedures/templates/1-hello-world/cover.png" width="200">](../procedures/templates/1-hello-world)
+[<img src="https://raw.githubusercontent.com/tofupilot/framework/main/templates/1-hello-world/cover.png" width="200">](https://github.com/tofupilot/framework/tree/main/templates/1-hello-world)
 
 Simplest procedure showing basic structure
 
 </td>
 <td>
 
-[<img src="../procedures/templates/2-measurements-basic/cover.png" width="200">](../procedures/templates/2-measurements-basic)
+[<img src="https://raw.githubusercontent.com/tofupilot/framework/main/templates/2-measurements-basic/cover.png" width="200">](https://github.com/tofupilot/framework/tree/main/templates/2-measurements-basic)
 
 Capture data and validate with pass/fail criteria
 
 </td>
 <td>
 
-[<img src="../procedures/templates/3-operator-ui-basic/cover.png" width="200">](../procedures/templates/3-operator-ui-basic)
+[<img src="https://raw.githubusercontent.com/tofupilot/framework/main/templates/3-operator-ui-basic/cover.png" width="200">](https://github.com/tofupilot/framework/tree/main/templates/3-operator-ui-basic)
 
 Interactive interfaces with input and display
 
@@ -127,38 +127,38 @@ Interactive interfaces with input and display
 <tr>
 <td width="33%">
 
-**[Plugs](../procedures/templates/4-plugs-basic)**
+**[Plugs](https://github.com/tofupilot/framework/tree/main/templates/4-plugs-basic)**
 
 </td>
 <td width="33%">
 
-**[Attachments](../procedures/templates/5-attachments-basic)**
+**[Attachments](https://github.com/tofupilot/framework/tree/main/templates/5-attachments-basic)**
 
 </td>
 <td width="33%">
 
-**[Parallel Phases](../procedures/templates/6-phases-parallel)**
+**[Parallel Phases](https://github.com/tofupilot/framework/tree/main/templates/6-phases-parallel)**
 
 </td>
 </tr>
 <tr>
 <td>
 
-[<img src="../procedures/templates/4-plugs-basic/cover.png" width="200">](../procedures/templates/4-plugs-basic)
+[<img src="https://raw.githubusercontent.com/tofupilot/framework/main/templates/4-plugs-basic/cover.png" width="200">](https://github.com/tofupilot/framework/tree/main/templates/4-plugs-basic)
 
 Persistent resources like test instruments
 
 </td>
 <td>
 
-[<img src="../procedures/templates/5-attachments-basic/cover.png" width="200">](../procedures/templates/5-attachments-basic)
+[<img src="https://raw.githubusercontent.com/tofupilot/framework/main/templates/5-attachments-basic/cover.png" width="200">](https://github.com/tofupilot/framework/tree/main/templates/5-attachments-basic)
 
 Attach files and data to test reports
 
 </td>
 <td>
 
-[<img src="../procedures/templates/6-phases-parallel/cover.png" width="200">](../procedures/templates/6-phases-parallel)
+[<img src="https://raw.githubusercontent.com/tofupilot/framework/main/templates/6-phases-parallel/cover.png" width="200">](https://github.com/tofupilot/framework/tree/main/templates/6-phases-parallel)
 
 Run independent test phases simultaneously
 
