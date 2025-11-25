@@ -82,7 +82,7 @@ impl Orchestrator {
         {
             let mut scopes = HashMap::new();
             for plug_def in &self.procedure_definition.plugs {
-                let scope = if plug_def.scope == Some(crate::procedure::schema::Scope::All) {
+                let scope = if plug_def.scope == crate::procedure::schema::Scope::All {
                     PlugScope::All
                 } else {
                     PlugScope::Each
@@ -430,7 +430,7 @@ impl Orchestrator {
         let (procedure_plugs, slot_plugs): (Vec<_>, Vec<_>) = self.procedure_definition
             .plugs
             .iter()
-            .partition(|p| p.scope == Some(crate::procedure::schema::Scope::All));
+            .partition(|p| p.scope == crate::procedure::schema::Scope::All);
 
         let procedure_plug_count = procedure_plugs.len();
         let slot_plug_count = slot_plugs.len();

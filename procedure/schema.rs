@@ -525,8 +525,7 @@ pub struct PlugDefinition {
     #[validate(length(min = 1, max = 100))]
     pub name: String,
 
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub scope: Option<Scope>,
+    pub scope: Scope,
 
     pub python: PythonSpec,
 
@@ -544,7 +543,7 @@ impl From<PlugDefinitionYaml> for PlugDefinition {
         PlugDefinition {
             key,
             name: yaml.name,
-            scope: yaml.scope,
+            scope: yaml.scope.unwrap_or(Scope::Each),
             python: yaml.python,
             description: yaml.description,
         }
@@ -557,7 +556,7 @@ impl PlugDefinition {
         PlugDefinitionYaml {
             key: if self.key != auto_key { Some(self.key.clone()) } else { None },
             name: self.name.clone(),
-            scope: self.scope,
+            scope: Some(self.scope),
             python: self.python.clone(),
             description: self.description.clone(),
         }
@@ -583,7 +582,7 @@ impl PlugDefinition {
     }
 
     pub fn scope_is_all(&self) -> bool {
-        matches!(self.scope, Some(Scope::All))
+        matches!(self.scope, Scope::All)
     }
 }
 
@@ -982,7 +981,7 @@ impl ProcedureDefinition {
         self.plugs
             .iter()
             .map(|plug| {
-                let scope = if plug.scope == Some(Scope::All) {
+                let scope = if plug.scope == Scope::All {
                     PlugScope::All
                 } else {
                     PlugScope::Each

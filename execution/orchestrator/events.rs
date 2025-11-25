@@ -95,7 +95,7 @@ impl Orchestrator {
         let (plugs_all, plugs_each): (Vec<_>, Vec<_>) = procedure
             .plugs
             .iter()
-            .partition(|p| p.scope == Some(crate::procedure::schema::Scope::All));
+            .partition(|p| p.scope == crate::procedure::schema::Scope::All);
 
         let plugs_all: Vec<PlannedPlug> = plugs_all
             .into_iter()
