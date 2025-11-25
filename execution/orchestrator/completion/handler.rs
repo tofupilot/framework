@@ -265,10 +265,7 @@ impl Orchestrator {
         }
 
         match next_action {
-            PhaseNextAction::Retry => {
-                self.handle_retry(state, event, job_result, app_handle)
-                    .await
-            }
+            PhaseNextAction::Retry => self.handle_retry(state, event, job_result).await,
             PhaseNextAction::Stop => {
                 self.handle_stop(state, event, job_result, app_handle).await;
                 false
@@ -291,17 +288,8 @@ impl Orchestrator {
         state: &mut crate::execution::state::OrchestratorState,
         event: JobCompletionEvent,
         job_result: JobResult,
-        app_handle: Option<&AppHandle>,
     ) -> bool {
         let should_retry = event.original_job.can_retry();
-
-        log::debug!(
-            "DEBUG handle_retry called: phase={}, should_retry={}, retry_count={}, retry_limit={}",
-            event.original_job.phase_name,
-            should_retry,
-            event.original_job.retry_count,
-            event.original_job.retry_limit
-        );
 
         if !should_retry {
             state.complete_job_with_info(
@@ -311,7 +299,7 @@ impl Orchestrator {
                 event.original_job.slot_id.clone(),
                 job_result,
             );
-            self.emit_stats(app_handle).await;
+            // emit_stats is called by handle_job_completion after releasing state lock
             return true;
         }
 

@@ -1,5 +1,0 @@
-[project]
-name = "test-3-python-script"
-version = "1.0.1"
-requires-python = ">=3.9"
-dependencies = []

@@ -357,18 +357,18 @@ impl Orchestrator {
                         continue;
                     }
 
-                    let has_running_slot_jobs =
-                        (0..state.worker_state.num_workers()).any(|worker_id| {
-                            if let Some(job_id) = state.worker_state.get_worker_job(worker_id) {
-                                state
-                                    .job_to_slot
-                                    .get(&job_id)
-                                    .map(|running_slot| running_slot == slot_id)
-                                    .unwrap_or(false)
-                            } else {
-                                false
-                            }
-                        });
+                    let running_jobs_info: Vec<_> = (0..state.worker_state.num_workers())
+                        .filter_map(|worker_id| {
+                            state.worker_state.get_worker_job(worker_id).map(|job_id| {
+                                let slot = state.job_to_slot.get(&job_id).cloned();
+                                (worker_id, job_id, slot)
+                            })
+                        })
+                        .collect();
+
+                    let has_running_slot_jobs = running_jobs_info.iter().any(|(_, _, slot)| {
+                        slot.as_ref() == Some(slot_id)
+                    });
 
                     if has_running_slot_jobs {
                         checked_jobs.push(job);

@@ -582,6 +582,9 @@ impl PlugDefinition {
         })
     }
 
+    pub fn scope_is_all(&self) -> bool {
+        matches!(self.scope, Some(Scope::All))
+    }
 }
 
 /// Python specification: "path/to/file:callable_name" or "path.to.file:callable_name"

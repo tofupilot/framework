@@ -84,7 +84,7 @@ class DataLogger:
             "temperature": temperature,
             "phase": phase,
         }
-        self.log.append(entry)
+        self.logs.append(entry)
         print(
             f"📝 Logged: [{phase}] Sensor {sensor_id}: {temperature}°C at {timestamp}"
         )

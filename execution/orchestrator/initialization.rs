@@ -302,7 +302,11 @@ impl Orchestrator {
                     }
                 }
                 StageScope::TeardownAll => {
-                    // All-slots teardown phases must wait for ALL each-slot teardown phases across ALL slots
+                    // All-slots teardown phases must wait for ALL Main phases AND all TeardownEach phases
+                    // This ensures teardown runs after all main work is complete, even if no TeardownEach phases exist
+                    for main_jobs in main_phase_job_ids.values() {
+                        job.depends_on.extend(main_jobs.iter().copied());
+                    }
                     job.depends_on
                         .extend(all_teardown_slot_job_ids.iter().copied());
                 }

@@ -13,8 +13,8 @@ impl Orchestrator {
     /// Ensure plugs are created at the appropriate scope boundaries
     ///
     /// Lifecycle boundaries:
-    /// - All-slots: Created once before first all-slots setup phase
-    /// - Each-slot: Created per-slot before first each-slot setup phase for that slot
+    /// - All-slots (scope: all): Created once before the first phase that needs them
+    /// - Each-slot (scope: each): Created per-slot before the first phase that needs them for that slot
     pub(super) async fn ensure_plugs_created_for_job(
         &self,
         job: &Job,
@@ -22,11 +22,18 @@ impl Orchestrator {
     ) -> Result<(), String> {
         let procedure_def = &self.procedure_definition;
 
-        // Create all-slots plugs if this is the first all-slots setup phase
-        if matches!(job.stage_scope, StageScope::SetupAll) {
+        // Create all-slots plugs if not yet created
+        // Triggered by: SetupAll phase, or any phase that requires a scope:all plug
+        let needs_procedure_plugs = matches!(job.stage_scope, StageScope::SetupAll)
+            || procedure_def
+                .plugs
+                .iter()
+                .any(|p| p.scope_is_all() && job.required_plugs.contains(&p.key));
+
+        if needs_procedure_plugs {
             let mut procedure_plugs_created = self.procedure_plugs_created.write().await;
             if !*procedure_plugs_created {
-                log::info!("Creating all-slots plugs before first all-slots setup phase");
+                log::info!("Creating all-slots plugs before phase '{}'", job.phase_name);
 
                 // First: Clean up any manually-started plugs to prevent conflicts
                 let resource_manager = self.resource_manager.write().await;
@@ -60,14 +67,23 @@ impl Orchestrator {
             }
         }
 
-        // Create each-slot plugs if this is the first each-slot setup phase for this slot
-        if matches!(job.stage_scope, StageScope::SetupEach) {
+        // Create each-slot plugs if not yet created for this slot
+        // Triggered by: SetupEach phase, or any slot-scoped phase that requires a scope:each plug
+        let needs_slot_plugs = job.slot_id.is_some()
+            && (matches!(job.stage_scope, StageScope::SetupEach)
+                || procedure_def
+                    .plugs
+                    .iter()
+                    .any(|p| !p.scope_is_all() && job.required_plugs.contains(&p.key)));
+
+        if needs_slot_plugs {
             if let Some(ref slot_id) = job.slot_id {
                 let mut created_slots = self.slot_plugs_created.write().await;
                 if !created_slots.contains(slot_id) {
                     log::info!(
-                        "Creating each-slot plugs for {} before each-slot setup phase",
-                        slot_id
+                        "Creating each-slot plugs for {} before phase '{}'",
+                        slot_id,
+                        job.phase_name
                     );
 
                     self.emit_plug_scope_event("running").await;

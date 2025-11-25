@@ -302,9 +302,12 @@ impl OrchestratorState {
         // Check if there are pending slots to queue
         if self.pending_slot_jobs.is_empty() {
             // Check if we need to queue teardown procedure jobs
+            // Must also check pending_delayed_retry_handles to avoid starting teardown
+            // while a retry is still waiting to be enqueued
             if !self.teardown_procedure_jobs.is_empty()
                 && self.job_queue.is_empty()
                 && self.worker_state.count_busy() == 0
+                && self.pending_delayed_retry_handles.is_empty()
             {
                 log::trace!("📋 All slots complete, enqueueing teardown procedure phases");
                 // Collect jobs first to avoid borrow issues
@@ -317,8 +320,12 @@ impl OrchestratorState {
             return false;
         }
 
-        // Check if current slot work is complete (no jobs in queue and no busy workers)
-        if self.job_queue.is_empty() && self.worker_state.count_busy() == 0 {
+        // Check if current slot work is complete (no jobs in queue, no busy workers,
+        // and no pending delayed retries)
+        if self.job_queue.is_empty()
+            && self.worker_state.count_busy() == 0
+            && self.pending_delayed_retry_handles.is_empty()
+        {
             // Queue the next slot's jobs
             if !self.pending_slot_jobs.is_empty() {
                 let (slot_id, jobs) = self.pending_slot_jobs.remove(0);

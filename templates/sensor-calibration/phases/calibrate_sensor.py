@@ -3,8 +3,7 @@ import sys
 import time
 
 
-def calibrate_sensor(phase, temperature_sensor, data_logger, run):
-    logs = run.logs
+def calibrate_sensor(phase, temperature_sensor, data_logger, run, log):
     slot_id = run.slot_id
 
     log.info("=" * 60)
@@ -43,5 +42,3 @@ def calibrate_sensor(phase, temperature_sensor, data_logger, run):
 
     log.info("Calibration complete!")
     log.info("=" * 60)
-
-    

@@ -33,10 +33,9 @@ setup:
 
 main:
   - name: calibrate_sensor
-    python: phases/calibrate_sensor
+    python: phases/calibrate_sensor:calibrate_sensor
     description: Calibrate the temperature sensor using reference points
 
   - name: validate_calibration
-    python: phases/validate_calibration
+    python: phases/validate_calibration:validate_calibration
     description: Validate sensor calibration by comparing readings
-

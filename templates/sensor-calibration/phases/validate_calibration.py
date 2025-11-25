@@ -3,8 +3,7 @@ import sys
 import time
 
 
-def validate_calibration(phase, temperature_sensor, data_logger, run):
-    logs = run.logs
+def validate_calibration(phase, temperature_sensor, data_logger, run, log):
     slot_id = run.slot_id
 
     log.info("=" * 60)
@@ -36,9 +35,7 @@ def validate_calibration(phase, temperature_sensor, data_logger, run):
     stats = data_logger.get_statistics()
     log.info("Overall Session Statistics:")
     log.info(f"  Total measurements: {stats['count']}")
-    log.info(
-        f"  Min: {stats['min']}°C | Max: {stats['max']}°C | Avg: {stats['avg']}°C"
-    )
+    log.info(f"  Min: {stats['min']}°C | Max: {stats['max']}°C | Avg: {stats['avg']}°C")
 
     if temp_range < 1.0:
         log.info("Calibration validated successfully! Sensor readings are stable.")

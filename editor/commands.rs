@@ -155,7 +155,6 @@ pub async fn save_editor_settings(app: AppHandle, settings: EditorSettings) -> R
 #[tauri::command]
 #[specta::specta]
 pub async fn save_yaml_config(procedure_file: String, config_json: String) -> Result<String, String> {
-    use std::fs;
     use validator::Validate;
 
     // Deserialize from JSON (Runtime types with required keys)
@@ -201,7 +200,9 @@ pub async fn save_yaml_config(procedure_file: String, config_json: String) -> Re
     }
 
     // Write to file
-    fs::write(&procedure_file, yaml_content).map_err(|e| format!("Failed to write file: {}", e))?;
+    tokio::fs::write(&procedure_file, yaml_content)
+        .await
+        .map_err(|e| format!("Failed to write file: {}", e))?;
 
     Ok("Configuration saved successfully".to_string())
 }
