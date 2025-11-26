@@ -45,7 +45,7 @@ The best way to get started with **TofuPilot Framework** is to use **TofuPilot S
 
 <img src="https://raw.githubusercontent.com/tofupilot/framework/main/.github/images/studio-home.png" alt="TofuPilot Studio Home" width="300">
 
-Access your projects and templates
+Browse projects and templates
 
 </td>
 <td>

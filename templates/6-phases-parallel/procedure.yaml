@@ -1,6 +1,6 @@
 name: Phases Parallel
 version: 1.0.0
-description: Shows parallel phases running independently
+description: Run multiple phases simultaneously
 
 main:
   - key: initialize
