@@ -106,14 +106,14 @@ You can clone these templates from [**TofuPilot Studio**](https://www.tofupilot.
 
 [<img src="https://raw.githubusercontent.com/tofupilot/framework/main/templates/1-hello-world/cover.png" width="200">](https://github.com/tofupilot/framework/tree/main/templates/1-hello-world)
 
-Simplest procedure showing basic structure
+Simple procedure showing basic structure
 
 </td>
 <td>
 
 [<img src="https://raw.githubusercontent.com/tofupilot/framework/main/templates/2-measurements-basic/cover.png" width="200">](https://github.com/tofupilot/framework/tree/main/templates/2-measurements-basic)
 
-Capture data and validate with pass/fail criteria
+Capture data with pass/fail criteria
 
 </td>
 <td>
@@ -172,13 +172,13 @@ You can learn more about all TofuPilot features in the [docs](https://tofupilot.
 
 [<img src="https://raw.githubusercontent.com/tofupilot/framework/main/.github/images/readme-docs.png" alt="Documentation" width="200">](https://tofupilot.com/docs/framework)
 
-You can raise an issue on [GitHub](https://github.com/tofupilot/framework/issues) or [Discord](https://discord.gg/tofupilot) for doc improvements.
+You can raise an issue on [GitHub](https://github.com/tofupilot/framework/issues) or [Discord](https://discord.gg/fK3AeTyngh) for doc improvements.
 
 ## Community
 
-You can join our [Discord](https://discord.gg/tofupilot) server to ask anything, report an issue, or get latest updates on TofuPilot features and changes.
+You can join our [Discord](https://discord.gg/fK3AeTyngh) server to ask anything, report an issue, or get latest updates on TofuPilot features and changes.
 
-[<img src="https://raw.githubusercontent.com/tofupilot/framework/main/.github/images/readme-discord.png" alt="Join our Discord" width="200">](https://discord.gg/tofupilot)
+[<img src="https://raw.githubusercontent.com/tofupilot/framework/main/.github/images/readme-discord.png" alt="Join our Discord" width="200">](https://discord.gg/fK3AeTyngh)
 
 You can also raise issues on this [repository](https://github.com/tofupilot/framework/issues) directly.
 
