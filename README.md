@@ -12,7 +12,7 @@
 
 - **Phases:** Break tests into phases with dependencies
 - **Operator UI:** Declare components in YAML, no frontend code
-- **Parallel execution:** Run phases and units concurrently
+- **Parallel execution:** Run multiple phases simultaneously
 - **Measurements:** Define limits, automatic pass/fail
 - **Plugs:** Equipment drivers as Python classes
 - **Cross-platform:** Windows, Linux, macOS
@@ -66,9 +66,9 @@ Run and debug your procedure
 </table>
 
 1. Download the latest version for:
-   - Windows (coming soon)
-   - Linux (coming soon)
-   - macOS (coming soon)
+   - [Windows](https://cdn.crabnebula.app/download/tofupilot/tofupilot-studio/latest/platform/nsis-x86_64)
+   - [Linux](https://cdn.crabnebula.app/download/tofupilot/tofupilot-studio/latest/platform/appimage-x86_64)
+   - [macOS](https://cdn.crabnebula.app/download/tofupilot/tofupilot-studio/latest/platform/dmg-aarch64)
 2. Clone a template from the home page
 3. Run it
 4. Customize and extend your test procedure
@@ -184,7 +184,7 @@ You can also raise issues on this [repository](https://github.com/tofupilot/fram
 
 ## About
 
-**TofuPilot Framework** is maintained by the crew of [TofuPilot](https://www.tofupilot.com). 
+**TofuPilot Framework** is maintained by the crew of [TofuPilot](https://www.tofupilot.com/about). 
 
 <img src="https://raw.githubusercontent.com/tofupilot/framework/main/.github/images/readme-about.png" alt="About TofuPilot" width="200">
 
@@ -198,10 +198,10 @@ TofuPilot Framework is open-source under the [MIT license](LICENSE), meaning you
 
 TofuPilot Studio and Dashboard source code are not yet open-source, though we're exploring this for the future.
 
-## Support
+## Support Us
 
 We'd love your support through feedback, bug reports, feature requests, and spreading the word to your hardware friends.
 
-[<img src="https://raw.githubusercontent.com/tofupilot/framework/main/.github/images/readme-support.png" alt="Get Support" width="200">](https://www.tofupilot.com/pricing)
+[<img src="https://raw.githubusercontent.com/tofupilot/framework/main/.github/images/readme-support.png" alt="Support Us" width="200">](https://www.tofupilot.com/pricing)
 
 The best way to support our team is getting a [TofuPilot Pro](https://www.tofupilot.com/pricing) account to get plug-and-play database and analytics for all your tests.
