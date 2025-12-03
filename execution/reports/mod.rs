@@ -233,13 +233,27 @@ impl ReportManager {
         ) {
             let duration_ms = Local::now().timestamp_millis() - start_time;
 
-            let collected_unit_info = self.initial_unit_info.clone().or_else(|| {
-                job_results
+            let collected_unit_info = {
+                let phase_unit = job_results
                     .values()
                     .filter_map(|r| r.unit.as_ref())
                     .max_by_key(|_| chrono::Utc::now())
-                    .cloned()
-            });
+                    .cloned();
+
+                match (self.initial_unit_info.clone(), phase_unit) {
+                    (Some(initial), Some(phase)) => Some(crate::execution::types::UnitInfo {
+                        serial_number: phase.serial_number.or(initial.serial_number),
+                        part_number: phase.part_number.or(initial.part_number),
+                        revision_number: phase.revision_number.or(initial.revision_number),
+                        batch_number: phase.batch_number.or(initial.batch_number),
+                        sub_units: phase.sub_units.or(initial.sub_units),
+                        status: phase.status,
+                    }),
+                    (Some(initial), None) => Some(initial),
+                    (None, Some(phase)) => Some(phase),
+                    (None, None) => None,
+                }
+            };
 
             // Build phase reports from job results
             let mut phases = Vec::new();

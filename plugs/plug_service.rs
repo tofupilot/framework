@@ -38,6 +38,64 @@ impl PlugServiceManager {
         }
     }
 
+    async fn wait_for_plug_ready(
+        client: &PlugServiceClient<Channel>,
+        plug_name: &str,
+        timeout_secs: u64,
+    ) -> Result<(), String> {
+        use crate::plugs::grpc::StatusRequest;
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
+        let poll_interval = std::time::Duration::from_millis(100);
+
+        loop {
+            let mut client = client.clone();
+            match client.get_status(StatusRequest {}).await {
+                Ok(response) => {
+                    let status = response.into_inner();
+                    if status.success {
+                        return Ok(());
+                    }
+                    if let Some(ref err) = status.error {
+                        if !err.contains("initializing") {
+                            return Err(err.clone());
+                        }
+                    }
+                }
+                Err(e) => {
+                    log::warn!("GetStatus RPC failed for {}: {}", plug_name, e);
+                }
+            }
+
+            if std::time::Instant::now() >= deadline {
+                return Err(format!(
+                    "Plug '{}' initialization timed out after {}s",
+                    plug_name, timeout_secs
+                ));
+            }
+
+            tokio::time::sleep(poll_interval).await;
+        }
+    }
+
+    fn find_plug_script_cli() -> Result<PathBuf, String> {
+        let exe_path = std::env::current_exe()
+            .map_err(|e| format!("Failed to get current executable path: {}", e))?;
+        let exe_dir = exe_path
+            .parent()
+            .ok_or("Failed to get executable directory")?;
+
+        let script_path = exe_dir.join("python").join("tp_plug.py");
+        if script_path.exists() {
+            return Ok(script_path);
+        }
+
+        Err(format!(
+            "tp_plug.py not found at {}. Ensure the Python resources are built.",
+            script_path.display()
+        ))
+    }
+
     /// Start a plug service for a specific plug instance
     pub async fn start_plug_service(
         &self,
@@ -54,18 +112,20 @@ impl PlugServiceManager {
             }
         }
 
-        let handle = app_handle.ok_or("AppHandle required for plug service")?;
-
-        let python_script = handle
-            .path()
-            .resolve(
-                "python/tp_plug.py",
-                tauri::path::BaseDirectory::Resource,
-            )
-            .map_err(|e| format!("Failed to resolve tp_plug.py: {}", e))?;
+        let python_script = if let Some(handle) = app_handle {
+            handle
+                .path()
+                .resolve(
+                    "python/tp_plug.py",
+                    tauri::path::BaseDirectory::Resource,
+                )
+                .map_err(|e| format!("Failed to resolve tp_plug.py: {}", e))?
+        } else {
+            Self::find_plug_script_cli()?
+        };
 
         log::info!("Resolving Python for plug service: {}", instance_key);
-        let python_path = crate::python::resolve_python_internal(Some(handle), &self.project_dir)
+        let python_path = crate::python::resolve_python_internal(app_handle, &self.project_dir)
             .await
             .map_err(|e| {
                 log::error!(
@@ -102,7 +162,7 @@ impl PlugServiceManager {
         let slot_id_clone = slot_id.clone();
         let app_handle_opt = app_handle.cloned();
 
-        let service = GrpcProcess::spawn(
+        let mut service = GrpcProcess::spawn(
             &python_path,
             python_script,
             vec![
@@ -169,6 +229,12 @@ impl PlugServiceManager {
 
         let port = service.port;
 
+        if let Err(e) = Self::wait_for_plug_ready(&service.client, &instance_key, 30).await {
+            log::error!("Plug '{}' initialization failed: {}", instance_key, e);
+            service.force_kill().await.ok();
+            return Err(e);
+        }
+
         {
             let mut used_ports = self.used_ports.lock().await;
             used_ports.insert(port);
@@ -203,7 +269,7 @@ impl PlugServiceManager {
             services.keys().cloned().collect::<Vec<_>>()
         );
 
-        if let Some(service) = services.remove(plug_name) {
+        if let Some(mut service) = services.remove(plug_name) {
             let port = service.port;
             log::info!("Stopping plug service {} on port {}", plug_name, port);
             drop(services);
@@ -245,7 +311,7 @@ impl PlugServiceManager {
             services.remove(plug_name)
         };
 
-        if let Some(service) = service {
+        if let Some(mut service) = service {
             let port = service.port;
 
             log::warn!(

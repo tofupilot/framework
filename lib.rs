@@ -1,5 +1,7 @@
 //! Tauri application entry point - registers commands, events, and plugins.
 
+use tauri::Manager;
+
 pub mod cli;
 pub mod editor;
 pub mod execution;
@@ -54,6 +56,7 @@ pub fn run() {
             python::commands::write_python_file,
             python::commands::analyze_python_file,
             python::commands::to_python_identifier_text,
+            python::commands::compute_relative_path,
         ])
         .events(tauri_specta::collect_events![
             // Python events
@@ -140,6 +143,42 @@ pub fn run() {
         .plugin(tauri_plugin_deep_link::init())
         // Register global state accessible from commands
         .manage(OrchestratorState::default())
+        // Kill all workers when window is closed
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                let app_handle = window.app_handle().clone();
+                api.prevent_close();
+
+                tauri::async_runtime::spawn(async move {
+                    let orchestrator_state = app_handle.state::<OrchestratorState>();
+
+                    let worker_refs = orchestrator_state.worker_refs.lock().await;
+                    for (execution_id, workers_arc) in worker_refs.iter() {
+                        log::info!("Killing workers for execution: {}", execution_id);
+                        let mut workers = workers_arc.write().await;
+                        for worker in workers.iter_mut() {
+                            if let Err(e) = worker.force_shutdown().await {
+                                log::warn!("Failed to kill worker: {}", e);
+                            }
+                        }
+                    }
+                    drop(worker_refs);
+
+                    let resource_manager_refs = orchestrator_state.resource_manager_refs.lock().await;
+                    for (execution_id, rm_arc) in resource_manager_refs.iter() {
+                        log::info!("Stopping plug services for execution: {}", execution_id);
+                        let rm = rm_arc.read().await;
+                        if let Err(e) = rm.force_destroy_all_plugs(Some(&app_handle)).await {
+                            log::warn!("Failed to stop plug services: {}", e);
+                        }
+                    }
+                    drop(resource_manager_refs);
+
+                    log::info!("All workers killed, exiting application");
+                    app_handle.exit(0);
+                });
+            }
+        })
         .manage(UIResponseState::default())
         .manage(StandalonePlugServiceState::default())
         // Register command handlers and mount event system

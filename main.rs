@@ -9,6 +9,7 @@ fn main() {
     if args.len() > 1 {
         match args[1].as_str() {
             "run" => {
+                tofupilot_studio_lib::cli::init_logger();
                 let procedure_path = tofupilot_studio_lib::cli::parse_args();
                 tofupilot_studio_lib::cli::run(procedure_path);
             }

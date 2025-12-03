@@ -26,6 +26,9 @@ impl Orchestrator {
 
         self.schedule_available_jobs(app_handle.clone()).await?;
 
+        // Track whether we've already emitted shutdown events (to avoid duplicates)
+        let mut shutdown_events_emitted = false;
+
         loop {
             let state = self.state.read().await;
 
@@ -36,69 +39,83 @@ impl Orchestrator {
             }
 
             let has_stop = state.job_results.values().any(|r| r.should_stop_test());
+            let busy_workers = state.worker_state.count_busy();
 
             if state.shutdown_requested || has_stop {
-                for worker_id in 0..state.worker_state.num_workers() {
-                    if let Some(job_id) = state.worker_state.get_worker_job(worker_id) {
-                        if let Some(info) = state.job_info.get(&job_id) {
-                            if let Some(ref app) = app_handle {
-                                let progress = super::orchestrator::JobProgress {
-                                    job_id: job_id.to_string(),
-                                    slot_id: info.slot_id.clone(),
-                                    phase_key: info.phase_key.clone(),
-                                    phase_name: info.phase_name.clone(),
-                                    stage_scope: StageScope::Main,
-                                    status: JobStatus::Stopping,
-                                    worker_id: Some(worker_id),
-                                    started_at: None,
-                                    timeout_ms: None,
-                                    outcome: None,
-                                    retry_count: 0,
-                                    error: None,
-                                };
-                                let _ = super::orchestrator::JobProgressEvent(progress).emit(app);
+                // Only emit shutdown events once
+                if !shutdown_events_emitted {
+                    shutdown_events_emitted = true;
+
+                    // Emit stopping status for running jobs
+                    for worker_id in 0..state.worker_state.num_workers() {
+                        if let Some(job_id) = state.worker_state.get_worker_job(worker_id) {
+                            if let Some(info) = state.job_info.get(&job_id) {
+                                if let Some(ref app) = app_handle {
+                                    let progress = super::orchestrator::JobProgress {
+                                        job_id: job_id.to_string(),
+                                        slot_id: info.slot_id.clone(),
+                                        phase_key: info.phase_key.clone(),
+                                        phase_name: info.phase_name.clone(),
+                                        stage_scope: StageScope::Main,
+                                        status: JobStatus::Stopping,
+                                        worker_id: Some(worker_id),
+                                        started_at: None,
+                                        timeout_ms: None,
+                                        outcome: None,
+                                        retry_count: 0,
+                                        error: None,
+                                    };
+                                    let _ = super::orchestrator::JobProgressEvent(progress).emit(app);
+                                }
                             }
+                        }
+                    }
+
+                    // Emit skipped status for queued jobs, but NOT for teardown phases
+                    for job in state.job_queue.iter() {
+                        // Skip teardown phases - they will run after shutdown
+                        if matches!(
+                            job.stage_scope,
+                            crate::procedure::schema::StageScope::TeardownEach
+                                | crate::procedure::schema::StageScope::TeardownAll
+                        ) {
+                            continue;
+                        }
+
+                        if let Some(ref app) = app_handle {
+                            let progress = super::orchestrator::JobProgress {
+                                job_id: job.id.to_string(),
+                                slot_id: job.slot_id.clone(),
+                                phase_key: job.phase_key.clone(),
+                                phase_name: job.phase_name.clone(),
+                                stage_scope: job.stage_scope.clone(),
+                                status: JobStatus::Skipped,
+                                worker_id: None,
+                                started_at: None,
+                                timeout_ms: job.timeout_ms,
+                                outcome: Some(Outcome::Skip),
+                                retry_count: job.retry_count,
+                                error: None,
+                            };
+                            let _ = super::orchestrator::JobProgressEvent(progress).emit(app);
                         }
                     }
                 }
 
-                // Emit skipped status for queued jobs, but NOT for teardown phases
-                for job in state.job_queue.iter() {
-                    // Skip teardown phases - they will run after shutdown
-                    if matches!(
-                        job.stage_scope,
-                        crate::procedure::schema::StageScope::TeardownEach
-                            | crate::procedure::schema::StageScope::TeardownAll
-                    ) {
-                        continue;
-                    }
-
-                    if let Some(ref app) = app_handle {
-                        let progress = super::orchestrator::JobProgress {
-                            job_id: job.id.to_string(),
-                            slot_id: job.slot_id.clone(),
-                            phase_key: job.phase_key.clone(),
-                            phase_name: job.phase_name.clone(),
-                            stage_scope: job.stage_scope.clone(),
-                            status: JobStatus::Skipped,
-                            worker_id: None,
-                            started_at: None,
-                            timeout_ms: job.timeout_ms,
-                            outcome: Some(Outcome::Skip),
-                            retry_count: job.retry_count,
-                            error: None,
-                        };
-                        let _ = super::orchestrator::JobProgressEvent(progress).emit(app);
-                    }
+                // If there are still running jobs, wait for them to complete before breaking
+                // This ensures their results are recorded in the report
+                // Break when execution is complete (queue empty, no busy workers)
+                if busy_workers == 0 && state.is_complete() {
+                    break;
                 }
-
-                break;
+                // Don't check is_complete() here - we need to wait for running jobs
+                drop(state);
+            } else {
+                if state.is_complete() {
+                    break;
+                }
+                drop(state);
             }
-
-            if state.is_complete() {
-                break;
-            }
-            drop(state);
 
             // Clean up finished delayed retry task handles
             {
@@ -259,13 +276,10 @@ impl Orchestrator {
             if state.shutdown_requested {
                 return Ok(());
             }
-
-            let has_stop = state.job_results.values().any(|r| r.should_stop_test());
             drop(state);
 
-            if has_stop {
-                return Ok(());
-            }
+            // Note: We don't check has_stop here because teardown phases should still run
+            // after a stop is triggered. cancel_all_jobs preserves teardown phases in the queue.
 
             let permit = match self.job_semaphore.clone().try_acquire_owned() {
                 Ok(permit) => permit,
@@ -292,8 +306,33 @@ impl Orchestrator {
             let job = self.get_next_ready_job().await;
 
             if let Some(job) = job {
-                self.ensure_plugs_created_for_job(&job, app_handle.as_ref())
-                    .await?;
+                if let Err(e) = self.ensure_plugs_created_for_job(&job, app_handle.as_ref()).await {
+                    log::error!("Plug initialization failed: {}", e);
+                    {
+                        let mut state = self.state.write().await;
+                        state.init_error = Some(e.clone());
+                        state.shutdown_requested = true;
+                    }
+                    if let Some(ref app) = app_handle {
+                        let progress = super::orchestrator::JobProgress {
+                            job_id: job.id.to_string(),
+                            slot_id: job.slot_id.clone(),
+                            phase_key: job.phase_key.clone(),
+                            phase_name: job.phase_name.clone(),
+                            stage_scope: job.stage_scope.clone(),
+                            status: JobStatus::Skipped,
+                            worker_id: None,
+                            started_at: None,
+                            timeout_ms: job.timeout_ms,
+                            outcome: Some(Outcome::Error),
+                            retry_count: job.retry_count,
+                            error: Some(e),
+                        };
+                        let _ = super::orchestrator::JobProgressEvent(progress).emit(app);
+                    }
+                    drop(permit);
+                    break;
+                }
 
                 {
                     let mut state = self.state.write().await;

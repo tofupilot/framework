@@ -91,8 +91,10 @@ impl<C> GrpcProcess<C> {
         })
     }
 
+    /// Graceful shutdown - sends RPC, polls for exit, kills if needed
+    /// Takes &mut self so caller retains ownership for fallback force_kill
     pub async fn graceful_shutdown<F, Fut>(
-        mut self,
+        &mut self,
         shutdown_rpc: F,
         timeout_secs: u64,
     ) -> Result<(), String>
@@ -136,7 +138,9 @@ impl<C> GrpcProcess<C> {
         Ok(())
     }
 
-    pub async fn force_kill(mut self) -> Result<(), String> {
+    /// Force kill - immediately kills the process group
+    /// Takes &mut self so caller retains ownership
+    pub async fn force_kill(&mut self) -> Result<(), String> {
         self.process
             .kill()
             .await

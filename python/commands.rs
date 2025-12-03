@@ -100,25 +100,9 @@ pub async fn analyze_python_file(
     file_path: String,
 ) -> Result<Vec<PythonCallable>, String> {
     let file_path_obj = std::path::Path::new(&file_path);
-    let procedure_dir_obj = std::path::Path::new(&procedure_dir);
 
     if !file_path_obj.exists() {
         return Err(format!("File does not exist: {}", file_path));
-    }
-
-    let canonical_file = file_path_obj
-        .canonicalize()
-        .map_err(|e| format!("Failed to resolve file path: {}", e))?;
-    let canonical_procedure = procedure_dir_obj
-        .canonicalize()
-        .map_err(|e| format!("Failed to resolve project directory: {}", e))?;
-
-    if !canonical_file.starts_with(&canonical_procedure) {
-        return Err(format!(
-            "File must be inside the project directory.\n\nFile: {}\nProject: {}",
-            canonical_file.display(),
-            canonical_procedure.display()
-        ));
     }
 
     let python_path =
@@ -187,4 +171,15 @@ if __name__ == '__main__':
 #[specta::specta]
 pub fn to_python_identifier_text(text: String) -> String {
     super::identifier::to_python_identifier(&text)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn compute_relative_path(from_dir: String, to_file: String) -> Result<String, String> {
+    let from = std::path::Path::new(&from_dir);
+    let to = std::path::Path::new(&to_file);
+
+    pathdiff::diff_paths(to, from)
+        .map(|p| p.to_string_lossy().replace('\\', "/"))
+        .ok_or_else(|| "Cannot compute relative path between these paths".to_string())
 }

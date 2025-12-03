@@ -85,17 +85,21 @@ impl PythonCommandBuilder {
     /// Convenience method: spawn the command immediately
     /// Returns AsyncGroupChild which wraps tokio::process::Child
     /// Process groups are always enabled for proper cleanup
+    /// kill_on_drop ensures processes are killed if handle is dropped
     pub fn spawn(mut self) -> std::io::Result<AsyncGroupChild> {
         #[cfg(windows)]
         {
             const CREATE_NO_WINDOW: u32 = 0x08000000;
             let mut group = self.cmd.group();
             group.creation_flags(CREATE_NO_WINDOW);
+            group.kill_on_drop(true);
             group.spawn()
         }
         #[cfg(not(windows))]
         {
-            self.cmd.group_spawn()
+            let mut group = self.cmd.group();
+            group.kill_on_drop(true);
+            group.spawn()
         }
     }
 }

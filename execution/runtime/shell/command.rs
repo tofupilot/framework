@@ -94,6 +94,7 @@ impl ShellCommandBuilder {
     }
 
     /// Convenience method: spawn the command immediately
+    /// kill_on_drop ensures processes are killed if handle is dropped
     pub fn spawn(mut self) -> std::io::Result<command_group::AsyncGroupChild> {
         #[cfg(windows)]
         {
@@ -101,12 +102,15 @@ impl ShellCommandBuilder {
             use command_group::AsyncCommandGroup;
             let mut group = self.cmd.group();
             group.creation_flags(CREATE_NO_WINDOW);
+            group.kill_on_drop(true);
             group.spawn()
         }
         #[cfg(not(windows))]
         {
             use command_group::AsyncCommandGroup;
-            self.cmd.group_spawn()
+            let mut group = self.cmd.group();
+            group.kill_on_drop(true);
+            group.spawn()
         }
     }
 

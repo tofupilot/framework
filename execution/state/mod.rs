@@ -47,6 +47,7 @@ pub struct OrchestratorState {
     pub pending_slot_jobs: Vec<(String, Vec<Job>)>, // For slot-first: remaining slots to process
     pub teardown_procedure_jobs: Vec<Job>, // Teardown procedure jobs to run after all slots
     pub pending_delayed_retry_handles: Vec<PendingDelayedRetry>, // Handles to spawned retry delay tasks with job info
+    pub init_error: Option<String>, // Error that occurred during initialization (e.g., plug init failure)
 }
 
 impl OrchestratorState {
@@ -67,6 +68,7 @@ impl OrchestratorState {
             pending_slot_jobs: Vec::new(),
             teardown_procedure_jobs: Vec::new(),
             pending_delayed_retry_handles: Vec::new(),
+            init_error: None,
         }
     }
 
@@ -188,6 +190,15 @@ impl OrchestratorState {
                 unit: None,
                 retry_count: job.retry_count,
             };
+            // Populate job_info so cancelled jobs appear in the report
+            self.job_info.insert(
+                job.id,
+                JobInfo {
+                    phase_key: job.phase_key.clone(),
+                    phase_name: job.phase_name.clone(),
+                    slot_id: job.slot_id.clone(),
+                },
+            );
             // Cancelled jobs from queue are original jobs (not yet started)
             if job.retry_count == 0 {
                 self.complete_original_job(job.id, result);
@@ -200,22 +211,38 @@ impl OrchestratorState {
     }
 
     /// Cancel all remaining jobs (for stop_on_first_failure)
+    /// Note: Teardown phases are NEVER cancelled - they must run for cleanup
     pub fn cancel_all_jobs(&mut self, reason: &str) -> Vec<Job> {
         let mut cancelled_jobs = Vec::new();
 
-        // Collect and clear all jobs from queue
-        while let Some(job) = self.job_queue.pop_front() {
-            cancelled_jobs.push(job);
+        // Drain the queue but preserve teardown phases
+        let all_jobs: Vec<Job> = self.job_queue.drain(..).collect();
+
+        for job in all_jobs {
+            // Never cancel teardown phases - they must run for cleanup
+            if matches!(
+                job.stage_scope,
+                crate::procedure::schema::StageScope::TeardownEach
+                    | crate::procedure::schema::StageScope::TeardownAll
+            ) {
+                self.job_queue.push_back(job);
+            } else {
+                cancelled_jobs.push(job);
+            }
         }
 
-        // Mark all cancelled jobs as completed with error
+        if !cancelled_jobs.is_empty() {
+            log::info!("Cancelling {} jobs: {}", cancelled_jobs.len(), reason);
+        }
+
+        // Mark all cancelled jobs as skipped (they didn't run, not errors)
         for job in &cancelled_jobs {
             let result = JobResult {
-                phase_result: crate::execution::job::PhaseResult::Continue,
-                phase_outcome: crate::execution::job::Outcome::Error,
-                next_action: None,   // Will be computed in completion handler
+                phase_result: crate::execution::job::PhaseResult::Skip,
+                phase_outcome: crate::execution::job::Outcome::Skip,
+                next_action: None,
                 timeout_secs: None,
-                error: Some(reason.to_string()),
+                error: None,
                 exit_code: None,
                 measurements: vec![],
                 logs: vec![],
@@ -225,6 +252,15 @@ impl OrchestratorState {
                 unit: None,
                 retry_count: job.retry_count,
             };
+            // Populate job_info so cancelled jobs appear in the report
+            self.job_info.insert(
+                job.id,
+                JobInfo {
+                    phase_key: job.phase_key.clone(),
+                    phase_name: job.phase_name.clone(),
+                    slot_id: job.slot_id.clone(),
+                },
+            );
             // Cancelled jobs from queue are original jobs (not yet started)
             if job.retry_count == 0 {
                 self.complete_original_job(job.id, result);
@@ -233,8 +269,11 @@ impl OrchestratorState {
             }
         }
 
-        // Set shutdown flag to stop execution
-        self.shutdown_requested = true;
+        // Only set shutdown flag if no teardown phases remain
+        // (teardown phases must still run for cleanup)
+        if self.job_queue.is_empty() {
+            self.shutdown_requested = true;
+        }
 
         cancelled_jobs
     }

@@ -416,6 +416,6 @@ impl Orchestrator {
             job_result,
         );
 
-        state.shutdown_requested = true;
+        // Note: shutdown_requested is set by cancel_all_jobs only if no teardown phases remain
     }
 }

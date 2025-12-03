@@ -3,6 +3,12 @@ use crate::execution::types::UnitInfo;
 use std::env;
 use std::path::PathBuf;
 
+pub fn init_logger() {
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+        .format_timestamp_millis()
+        .init();
+}
+
 pub fn parse_args() -> PathBuf {
     let args: Vec<String> = env::args().collect();
 
@@ -58,7 +64,8 @@ pub fn run(procedure_path: PathBuf) {
 
         if let Err(e) = orchestrator.initialize().await {
             log::error!("Failed to initialize workers: {}", e);
-            return;
+            let _ = orchestrator.shutdown(None).await;
+            std::process::exit(1);
         }
 
         let slots: Vec<String> = if let Some(execution) = &procedure_def.execution {
@@ -74,32 +81,49 @@ pub fn run(procedure_path: PathBuf) {
         for slot in &slots {
             if slot.trim().is_empty() {
                 log::error!("Slot names cannot be empty");
-                return;
+                let _ = orchestrator.shutdown(None).await;
+                std::process::exit(1);
             }
         }
+
+        log::info!("Workers: {} | Slots: {}", worker_count, slots.len());
+
+        // Build unit info from YAML default values
+        let unit_info = if let Some(unit_config) = &procedure_def.unit {
+            UnitInfo {
+                serial_number: unit_config.serial_number.as_ref().and_then(|c| c.default_value.clone()),
+                part_number: unit_config.part_number.as_ref().and_then(|c| c.default_value.clone()),
+                revision_number: unit_config.revision_number.as_ref().and_then(|c| c.default_value.clone()),
+                batch_number: unit_config.batch_number.as_ref().and_then(|c| c.default_value.clone()),
+                sub_units: None,
+                status: "active".to_string(),
+            }
+        } else {
+            UnitInfo {
+                serial_number: None,
+                part_number: None,
+                revision_number: None,
+                batch_number: None,
+                sub_units: None,
+                status: "active".to_string(),
+            }
+        };
+
+        // Set unit info BEFORE initializing report managers (same order as GUI flow)
+        orchestrator.set_initial_unit_info(unit_info.clone());
 
         let _ = orchestrator
             .initialize_report_managers(&procedure_path, &slots)
             .await;
 
-        log::info!("Workers: {} | Slots: {}", worker_count, slots.len());
-
-        let empty_unit_info = UnitInfo {
-            serial_number: None,
-            part_number: None,
-            revision_number: None,
-            batch_number: None,
-            sub_units: None,
-            status: "active".to_string(),
-        };
-
         let strategy = procedure_def.execution.as_ref().map(|e| e.strategy).unwrap_or(crate::procedure::schema::ExecutionStrategy::PhaseFirst);
         if let Err(e) = orchestrator
-            .submit_procedure(slots, strategy, empty_unit_info)
+            .submit_procedure(slots, strategy, unit_info)
             .await
         {
             log::error!("Failed to submit procedure: {}", e);
-            return;
+            let _ = orchestrator.shutdown(None).await;
+            std::process::exit(1);
         }
 
         let exit_code = match orchestrator.execute_all(None).await {

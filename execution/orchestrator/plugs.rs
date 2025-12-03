@@ -125,7 +125,14 @@ impl Orchestrator {
     ) -> HashMap<String, serde_json::Value> {
         let mut configs = HashMap::new();
         for def in &procedure.plugs {
-            configs.insert(def.key.clone(), def.to_config_json());
+            match def.to_config_json(&self.procedure_dir) {
+                Ok(config) => {
+                    configs.insert(def.key.clone(), config);
+                }
+                Err(e) => {
+                    log::error!("Failed to get config for plug '{}': {}", def.key, e);
+                }
+            }
         }
         configs
     }
@@ -150,7 +157,14 @@ impl Orchestrator {
             let plug_def = self.procedure_definition.plugs.iter().find(|p| &p.key == plug_key);
 
             if let Some(plug_def) = plug_def {
-                plug_configs.insert(plug_key.clone(), plug_def.to_config_json());
+                match plug_def.to_config_json(&self.procedure_dir) {
+                    Ok(config) => {
+                        plug_configs.insert(plug_key.clone(), config);
+                    }
+                    Err(e) => {
+                        log::error!("Failed to get config for plug '{}': {}", plug_key, e);
+                    }
+                }
             } else {
                 log::warn!(
                     "WARNING: Warning: Plug '{}' required by job '{}' not found in procedure definition",

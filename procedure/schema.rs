@@ -574,11 +574,12 @@ impl<'de> Deserialize<'de> for PlugDefinition {
 }
 
 impl PlugDefinition {
-    pub fn to_config_json(&self) -> serde_json::Value {
-        serde_json::json!({
-            "module": self.python.get_module(),
-            "class": self.python.get_callable_name()
-        })
+    pub fn to_config_json(&self, project_dir: &Path) -> Result<serde_json::Value, String> {
+        let (file_path, callable_name) = self.python.parse(project_dir)?;
+        Ok(serde_json::json!({
+            "file": file_path.to_string_lossy(),
+            "class": callable_name
+        }))
     }
 
     pub fn scope_is_all(&self) -> bool {
@@ -615,43 +616,68 @@ impl PythonSpec {
 
         // Split on ':' to separate path from callable name
         let parts: Vec<&str> = spec.split(':').collect();
-        if parts.len() > 2 {
+
+        // Handle Windows absolute paths (e.g., "C:/path/to/file.py:func")
+        // Windows paths have a drive letter followed by colon, so we may have 3 parts
+        let (path_part, name_part) = if parts.len() == 3
+            && parts[0].len() == 1
+            && parts[0].chars().next().map(|c| c.is_ascii_alphabetic()).unwrap_or(false)
+        {
+            // Windows absolute path: "C:/path/file.py:func" -> ["C", "/path/file.py", "func"]
+            let path = format!("{}:{}", parts[0], parts[1]);
+            (path, Some(parts[2].trim()))
+        } else if parts.len() > 2 {
             return Err(format!(
                 "Invalid spec format '{}': too many ':' separators",
                 spec
             ));
-        }
-
-        let path_part = parts[0].trim();
-        let name_part = parts.get(1).map(|s| s.trim());
+        } else {
+            (parts[0].trim().to_string(), parts.get(1).map(|s| s.trim()))
+        };
 
         // Validate path not empty
         if path_part.is_empty() {
             return Err("Path cannot be empty".into());
         }
 
-        // Validate no parent directory traversal
-        if path_part.contains("..") {
-            return Err(format!(
-                "Parent directory traversal not allowed: '{}'",
-                path_part
-            ));
-        }
+        // Check if path uses slash syntax (file path) or dot syntax (module path)
+        let is_file_path = path_part.contains('/') || path_part.contains('\\');
 
-        // Validate no absolute paths
-        if path_part.starts_with('/') || path_part.starts_with('~') {
-            return Err(format!("Absolute paths not allowed: '{}'", path_part));
-        }
+        let file_path = if is_file_path {
+            // File path syntax: resolve relative to project_dir, allow ..
+            let expanded_path = if path_part.starts_with('~') {
+                if let Some(home) = dirs::home_dir() {
+                    home.join(&path_part[1..].trim_start_matches('/'))
+                } else {
+                    return Err("Cannot expand ~ - home directory not found".into());
+                }
+            } else {
+                project_dir.join(&path_part)
+            };
 
-        // Validate Windows absolute paths
-        if path_part.len() >= 2 && path_part.chars().nth(1) == Some(':') {
-            return Err(format!("Absolute paths not allowed: '{}'", path_part));
-        }
+            // Canonicalize to resolve .. and symlinks
+            let resolved = expanded_path.canonicalize().unwrap_or(expanded_path);
 
-        // Convert "plugs.python.ethercat" → "plugs/python/ethercat.py"
-        let file_path = project_dir
-            .join(path_part.replace('.', "/"))
-            .with_extension("py");
+            // Ensure .py extension
+            if resolved.extension().map(|e| e == "py").unwrap_or(false) {
+                resolved
+            } else {
+                resolved.with_extension("py")
+            }
+        } else {
+            // Module path syntax (dots): no .. allowed, resolve relative to project_dir
+            if path_part.contains("..") {
+                return Err(format!(
+                    "Parent directory traversal not allowed in module paths. Use file path syntax instead: '{}'",
+                    path_part
+                ));
+            }
+
+            // Convert "plugs.python.ethercat" → "plugs/python/ethercat.py"
+            project_dir
+                .join(path_part.replace('.', "/"))
+                .with_extension("py")
+        };
 
         // Get callable name (or default to last component of path)
         let callable_name = if let Some(name) = name_part {
@@ -660,11 +686,11 @@ impl PythonSpec {
             }
             name.to_string()
         } else {
-            // Default to last component of path
-            path_part
-                .rsplit(&['.', '/'][..])
-                .next()
-                .unwrap_or(path_part)
+            // Default to file stem (filename without .py)
+            file_path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or(&path_part)
                 .to_string()
         };
 

@@ -92,6 +92,32 @@ async fn install_worker_dependencies(app: &AppHandle, project_path: &Path) -> Re
     Ok(())
 }
 
+fn install_worker_dependencies_cli(project_path: &Path) -> Result<(), String> {
+    log::info!("Installing worker dependencies via uv pip install (CLI mode)");
+
+    let venv_info = find_python_executable(project_path)
+        .and_then(|python_path| {
+            let venv_path = python_path.parent()?.parent()?.to_path_buf();
+            Some(venv_path)
+        })
+        .ok_or("No venv found")?;
+
+    let output = std::process::Command::new("uv")
+        .args(["pip", "install", "grpcio", "portpicker", "protobuf"])
+        .env("VIRTUAL_ENV", &venv_info)
+        .current_dir(project_path)
+        .output()
+        .map_err(|e| format!("Failed to run uv: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("UV pip install failed: {}", stderr));
+    }
+
+    log::info!("Worker dependencies installed successfully");
+    Ok(())
+}
+
 #[cfg(test)]
 pub(crate) fn create_manifest(project_path: &Path) -> Result<(), String> {
     let pyproject_path = project_path.join("pyproject.toml");
@@ -435,6 +461,8 @@ pub async fn resolve_python_internal(
 
         if let Some(app_handle) = app {
             install_worker_dependencies(app_handle, project_path).await.ok();
+        } else {
+            install_worker_dependencies_cli(project_path).ok();
         }
 
         return Ok(python_path.to_string_lossy().to_string());

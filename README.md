@@ -87,17 +87,17 @@ You can clone these templates from [**TofuPilot Studio**](https://www.tofupilot.
 <tr>
 <td width="33%">
 
-**[Hello World](./templates/1-hello-world)**
+**[Hello World](../procedures/templates/1-hello-world)**
 
 </td>
 <td width="33%">
 
-**[Measurements](./templates/2-measurements-basic)**
+**[Measurements](../procedures/templates/2-measurements-basic)**
 
 </td>
 <td width="33%">
 
-**[Operator UI](./templates/3-operator-ui-basic)**
+**[Operator UI](../procedures/templates/3-operator-ui-basic)**
 
 </td>
 </tr>
@@ -127,17 +127,17 @@ Interactive interfaces with input and display
 <tr>
 <td width="33%">
 
-**[Plugs](./templates/4-plugs-basic)**
+**[Plugs](https://github.com/tofupilot/framework/tree/main/templates/4-plugs-basic)**
 
 </td>
 <td width="33%">
 
-**[Attachments](./templates/5-attachments-basic)**
+**[Attachments](https://github.com/tofupilot/framework/tree/main/templates/5-attachments-basic)**
 
 </td>
 <td width="33%">
 
-**[Parallel Phases](./templates/6-phases-parallel)**
+**[Parallel Phases](https://github.com/tofupilot/framework/tree/main/templates/6-phases-parallel)**
 
 </td>
 </tr>

@@ -83,18 +83,38 @@ impl Worker {
         }
     }
 
-    pub async fn start(&mut self, app_handle: Option<&AppHandle>) -> Result<(), String> {
-        let handle = app_handle.ok_or("AppHandle required for gRPC worker")?;
+    fn find_worker_script_cli() -> Result<PathBuf, String> {
+        let exe_path = std::env::current_exe()
+            .map_err(|e| format!("Failed to get current executable path: {}", e))?;
+        let exe_dir = exe_path
+            .parent()
+            .ok_or("Failed to get executable directory")?;
 
+        let script_path = exe_dir.join("python").join("tp_worker.py");
+        if script_path.exists() {
+            return Ok(script_path);
+        }
+
+        Err(format!(
+            "tp_worker.py not found at {}. Ensure the Python resources are built.",
+            script_path.display()
+        ))
+    }
+
+    pub async fn start(&mut self, app_handle: Option<&AppHandle>) -> Result<(), String> {
         let abs_procedure_dir = self
             .procedure_dir
             .canonicalize()
             .map_err(|e| format!("Failed to canonicalize procedure dir: {}", e))?;
 
-        let worker_script = handle
-            .path()
-            .resolve("python/tp_worker.py", tauri::path::BaseDirectory::Resource)
-            .map_err(|e| format!("Failed to resolve tp_worker.py: {}", e))?;
+        let worker_script = if let Some(handle) = app_handle {
+            handle
+                .path()
+                .resolve("python/tp_worker.py", tauri::path::BaseDirectory::Resource)
+                .map_err(|e| format!("Failed to resolve tp_worker.py: {}", e))?
+        } else {
+            Self::find_worker_script_cli()?
+        };
 
         log::debug!(
             "Worker {} using gRPC script: {}",
@@ -103,7 +123,7 @@ impl Worker {
         );
 
         let python_cmd =
-            crate::python::resolve_python_internal(Some(handle), &abs_procedure_dir).await?;
+            crate::python::resolve_python_internal(app_handle, &abs_procedure_dir).await?;
 
         let worker_id = self.id;
 
@@ -381,14 +401,11 @@ impl Worker {
     }
 
     pub async fn shutdown(&mut self) -> Result<(), String> {
-        let process = {
-            let mut inner = self.inner.write().await;
-            inner.take()
-        };
+        let mut inner = self.inner.write().await;
 
-        if let Some(process) = process {
+        if let Some(ref mut process) = *inner {
             let mut client = process.client.clone();
-            process
+            let result = process
                 .graceful_shutdown(
                     || async move {
                         let _ = client.shutdown(Empty {}).await;
@@ -396,20 +413,29 @@ impl Worker {
                     },
                     5,
                 )
-                .await
+                .await;
+
+            // Take the process out after shutdown completes (it's dead now)
+            // This prevents double-killing and marks it as cleaned up
+            // If this future was cancelled before reaching here, kill_on_drop handles cleanup
+            inner.take();
+
+            result
         } else {
             Ok(())
         }
     }
 
     pub async fn force_shutdown(&mut self) -> Result<(), String> {
-        let process = {
-            let mut inner = self.inner.write().await;
-            inner.take()
-        };
+        let mut inner = self.inner.write().await;
 
-        if let Some(process) = process {
-            process.force_kill().await
+        if let Some(ref mut process) = *inner {
+            let result = process.force_kill().await;
+
+            // Take the process out after kill (it's dead now)
+            inner.take();
+
+            result
         } else {
             Ok(())
         }
@@ -471,9 +497,15 @@ impl Worker {
         let logs = result.logs.into_iter().map(Into::into).collect();
 
         // Parse unit info from JSON if present
-        let unit = result
-            .unit_json
-            .and_then(|json| serde_json::from_str(&json).ok());
+        let unit = result.unit_json.and_then(|json| {
+            match serde_json::from_str(&json) {
+                Ok(u) => Some(u),
+                Err(e) => {
+                    log::warn!("Failed to parse unit_json: {} (json: {})", e, json);
+                    None
+                }
+            }
+        });
 
         Ok(crate::execution::job::JobResult {
             phase_result,
