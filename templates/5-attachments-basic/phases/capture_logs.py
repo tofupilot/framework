@@ -1,5 +1,4 @@
 import tempfile
-import os
 
 
 def capture_logs(attach, log):
@@ -15,6 +14,5 @@ def capture_logs(attach, log):
         temp_path = f.name
 
     attach.file(temp_path, "execution.log")
-    os.unlink(temp_path)
 
     log.info("Log file attached")
