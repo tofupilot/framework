@@ -4,15 +4,6 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
-    fn test_version_matches() {
-        assert!(version_matches("3.11", "3.11"));
-        assert!(version_matches("3.11.5", "3.11"));
-        assert!(version_matches("3.11.5", "3.11.5"));
-        assert!(!version_matches("3.10.5", "3.11"));
-        assert!(!version_matches("3.11", "3.11.5"));
-    }
-
-    #[test]
     fn test_get_dependencies_missing_file() {
         let temp = TempDir::new().unwrap();
         assert_eq!(get_dependencies(temp.path()), Vec::<String>::new());
@@ -59,45 +50,6 @@ name = "test"
         std::fs::write(temp.path().join("pyproject.toml"), toml).unwrap();
         let deps = get_dependencies(temp.path());
         assert_eq!(deps, Vec::<String>::new());
-    }
-
-    #[test]
-    fn test_get_python_version_requirement_missing_file() {
-        let temp = TempDir::new().unwrap();
-        assert_eq!(get_python_version_requirement(temp.path()), None);
-    }
-
-    #[test]
-    fn test_get_python_version_requirement_valid() {
-        let temp = TempDir::new().unwrap();
-        let toml = r#"
-[project]
-requires-python = ">=3.11"
-"#;
-        std::fs::write(temp.path().join("pyproject.toml"), toml).unwrap();
-        assert_eq!(
-            get_python_version_requirement(temp.path()),
-            Some(">=3.11".to_string())
-        );
-    }
-
-    #[test]
-    fn test_create_manifest_file_exists() {
-        let temp = TempDir::new().unwrap();
-        std::fs::write(temp.path().join("pyproject.toml"), "existing").unwrap();
-        let result = create_manifest(temp.path());
-        assert!(result.is_ok());
-        let content = std::fs::read_to_string(temp.path().join("pyproject.toml")).unwrap();
-        assert_eq!(content, "existing");
-    }
-
-    #[test]
-    fn test_create_manifest_success() {
-        let temp = TempDir::new().unwrap();
-        create_manifest(temp.path()).unwrap();
-        assert!(temp.path().join("pyproject.toml").exists());
-        let content = std::fs::read_to_string(temp.path().join("pyproject.toml")).unwrap();
-        assert!(content.contains("requires-python"));
     }
 
     #[test]
@@ -205,5 +157,160 @@ requires-python = ">=3.11"
 
         delete_venv(temp.path().to_str().unwrap().to_string()).unwrap();
         assert!(!venv.exists());
+    }
+
+    #[test]
+    fn test_delete_venv_deletes_venv_folder() {
+        let temp = TempDir::new().unwrap();
+        let venv = temp.path().join("venv");
+        std::fs::create_dir(&venv).unwrap();
+        std::fs::write(venv.join("test.txt"), "test").unwrap();
+
+        delete_venv(temp.path().to_str().unwrap().to_string()).unwrap();
+        assert!(!venv.exists());
+    }
+
+    #[test]
+    fn test_delete_venv_prefers_dot_venv() {
+        let temp = TempDir::new().unwrap();
+        let dot_venv = temp.path().join(".venv");
+        let venv = temp.path().join("venv");
+        std::fs::create_dir(&dot_venv).unwrap();
+        std::fs::create_dir(&venv).unwrap();
+
+        delete_venv(temp.path().to_str().unwrap().to_string()).unwrap();
+        assert!(!dot_venv.exists());
+        assert!(venv.exists());
+    }
+
+    #[test]
+    fn test_ensure_manifest_creates_pyproject_when_missing() {
+        let temp = TempDir::new().unwrap();
+        let pyproject_path = temp.path().join("pyproject.toml");
+
+        assert!(!pyproject_path.exists());
+        ensure_manifest_with_studio_deps(temp.path()).unwrap();
+        assert!(pyproject_path.exists());
+
+        let content = std::fs::read_to_string(&pyproject_path).unwrap();
+        assert!(content.contains("[project]"));
+        assert!(content.contains("requires-python"));
+        assert!(content.contains("[dependency-groups]"));
+        assert!(content.contains("studio"));
+    }
+
+    #[test]
+    fn test_ensure_manifest_adds_studio_group_to_existing() {
+        let temp = TempDir::new().unwrap();
+        let pyproject_path = temp.path().join("pyproject.toml");
+        let initial = r#"[project]
+name = "my-project"
+version = "1.0.0"
+dependencies = ["requests"]
+"#;
+        std::fs::write(&pyproject_path, initial).unwrap();
+
+        ensure_manifest_with_studio_deps(temp.path()).unwrap();
+
+        let content = std::fs::read_to_string(&pyproject_path).unwrap();
+        assert!(content.contains("[dependency-groups]"));
+        assert!(content.contains("studio"));
+        assert!(content.contains("grpcio"));
+    }
+
+    #[test]
+    fn test_ensure_manifest_preserves_existing_content() {
+        let temp = TempDir::new().unwrap();
+        let pyproject_path = temp.path().join("pyproject.toml");
+        let initial = r#"[project]
+name = "my-project"
+version = "2.5.0"
+dependencies = ["numpy", "pandas"]
+
+[tool.ruff]
+line-length = 100
+"#;
+        std::fs::write(&pyproject_path, initial).unwrap();
+
+        ensure_manifest_with_studio_deps(temp.path()).unwrap();
+
+        let content = std::fs::read_to_string(&pyproject_path).unwrap();
+        assert!(content.contains("name = \"my-project\""));
+        assert!(content.contains("version = \"2.5.0\""));
+        assert!(content.contains("numpy"));
+        assert!(content.contains("pandas"));
+        assert!(content.contains("[tool.ruff]"));
+        assert!(content.contains("line-length = 100"));
+    }
+
+    #[test]
+    fn test_ensure_manifest_updates_existing_studio_group() {
+        let temp = TempDir::new().unwrap();
+        let pyproject_path = temp.path().join("pyproject.toml");
+        let initial = r#"[project]
+name = "my-project"
+version = "1.0.0"
+
+[dependency-groups]
+studio = ["grpcio==1.62.0", "portpicker", "protobuf"]
+"#;
+        std::fs::write(&pyproject_path, initial).unwrap();
+
+        ensure_manifest_with_studio_deps(temp.path()).unwrap();
+
+        let final_content = std::fs::read_to_string(&pyproject_path).unwrap();
+        assert!(final_content.contains("grpcio>=1.76.0"));
+        assert!(!final_content.contains("grpcio==1.62.0"));
+    }
+
+    #[test]
+    fn test_ensure_manifest_adds_to_existing_dependency_groups() {
+        let temp = TempDir::new().unwrap();
+        let pyproject_path = temp.path().join("pyproject.toml");
+        let initial = r#"[project]
+name = "my-project"
+version = "1.0.0"
+
+[dependency-groups]
+dev = ["pytest", "ruff"]
+"#;
+        std::fs::write(&pyproject_path, initial).unwrap();
+
+        ensure_manifest_with_studio_deps(temp.path()).unwrap();
+
+        let content = std::fs::read_to_string(&pyproject_path).unwrap();
+        assert!(content.contains("dev = ["));
+        assert!(content.contains("pytest"));
+        assert!(content.contains("studio = ["));
+        assert!(content.contains("grpcio"));
+    }
+
+    #[test]
+    fn test_ensure_manifest_invalid_toml_returns_error() {
+        let temp = TempDir::new().unwrap();
+        let pyproject_path = temp.path().join("pyproject.toml");
+        std::fs::write(&pyproject_path, "invalid toml [[[").unwrap();
+
+        let result = ensure_manifest_with_studio_deps(temp.path());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Failed to parse"));
+    }
+
+    #[test]
+    fn test_ensure_manifest_studio_deps_have_correct_packages() {
+        let temp = TempDir::new().unwrap();
+        let pyproject_path = temp.path().join("pyproject.toml");
+        let initial = r#"[project]
+name = "test"
+version = "0.1.0"
+"#;
+        std::fs::write(&pyproject_path, initial).unwrap();
+
+        ensure_manifest_with_studio_deps(temp.path()).unwrap();
+
+        let content = std::fs::read_to_string(&pyproject_path).unwrap();
+        assert!(content.contains("grpcio>=1.76.0"));
+        assert!(content.contains("portpicker"));
+        assert!(content.contains("protobuf"));
     }
 }

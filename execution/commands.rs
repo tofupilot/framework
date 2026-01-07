@@ -23,6 +23,21 @@ pub struct UnitInputRequestEvent {
 }
 
 #[derive(Debug, Clone, Serialize, Event, Type)]
+pub struct InitializationStatusEvent {
+    pub execution_id: String,
+    pub status: InitializationStatus,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum InitializationStatus {
+    Initializing,
+    Ready,
+    Failed,
+}
+
+#[derive(Debug, Clone, Serialize, Event, Type)]
 pub struct ExecutionProgressEvent {
     pub execution_id: String,
     pub status: String,
@@ -138,7 +153,7 @@ pub async fn execute_parallel_runs(
     orchestrator_state: State<'_, OrchestratorState>,
 ) -> Result<String, String> {
     let procedure_file_buf = PathBuf::from(&procedure_file);
-    let procedure_dir = PathBuf::from(&procedure_dir);
+    let procedure_dir_path = PathBuf::from(&procedure_dir);
 
     let procedure_def = crate::procedure::load_procedure_definition(&procedure_file_buf)
         .map_err(|e| format!("Failed to load procedure: {}", e))?;
@@ -160,8 +175,8 @@ pub async fn execute_parallel_runs(
         ));
     }
 
-    // Initialize report manager with UUID
-    let execution_uuid = uuid::Uuid::new_v4(); // Single execution ID for all slots
+    // Generate execution ID
+    let execution_uuid = uuid::Uuid::new_v4();
     let execution_id_str = execution_uuid.to_string();
 
     // Determine worker count: UI override > YAML > CPU count (default)
@@ -170,44 +185,10 @@ pub async fn execute_parallel_runs(
         .or_else(|| procedure_def.execution.as_ref().map(|e| e.workers))
         .unwrap_or_else(num_cpus::get);
 
-    log::info!("Initializing {} workers for execution", worker_count);
+    log::info!("Starting parallel initialization for execution {}", execution_id_str);
 
-    let mut orchestrator = Orchestrator::new(
-        worker_count,
-        procedure_dir.clone(),
-        execution_id_str.clone(),
-        execution_id_str.clone(),
-        procedure_def.clone(),
-    );
-    orchestrator.set_app_handle(app_handle.clone());
-    orchestrator.initialize().await.map_err(|e| {
-        log::error!("Worker initialization failed: {}", e);
-        format!("Failed to initialize workers: {}", e)
-    })?;
-
-    // Store orchestrator refs BEFORE waiting for unit input so stop/kill can find them
-    let state_arc = orchestrator.state.clone();
-    let workers_arc = orchestrator.workers.clone();
-    let resource_manager_arc = orchestrator.resource_manager.clone();
-    let orchestrator_arc = Arc::new(TokioMutex::new(orchestrator));
-    {
-        let mut orchestrators = orchestrator_state.orchestrators.lock().await;
-        orchestrators.insert(execution_id_str.clone(), orchestrator_arc.clone());
-    }
-    {
-        let mut state_refs = orchestrator_state.state_refs.lock().await;
-        state_refs.insert(execution_id_str.clone(), state_arc.clone());
-    }
-    {
-        let mut worker_refs = orchestrator_state.worker_refs.lock().await;
-        worker_refs.insert(execution_id_str.clone(), workers_arc.clone());
-    }
-    {
-        let mut resource_manager_refs = orchestrator_state.resource_manager_refs.lock().await;
-        resource_manager_refs.insert(execution_id_str.clone(), resource_manager_arc.clone());
-    }
-
-    // Emit unit input request and wait for response
+    // === EMIT UNIT INPUT REQUEST IMMEDIATELY ===
+    // This allows the user to start filling the form while initialization happens in background
     let (unit_input_tx, unit_input_rx) = tokio::sync::oneshot::channel();
     {
         let mut pending_unit_inputs = orchestrator_state.pending_unit_inputs.lock().await;
@@ -226,46 +207,118 @@ pub async fn execute_parallel_runs(
     }
     .emit(&app_handle);
 
-    // Wait for unit input with timeout (5 minutes), checking for cancellation
-    let unit_info_result = {
-        let state_arc_for_cancel = state_arc.clone();
-        let execution_id_for_cancel = execution_id_str.clone();
-        let orchestrator_state_for_cancel = (*orchestrator_state).clone();
+    // Emit initialization status: initializing
+    let _ = InitializationStatusEvent {
+        execution_id: execution_id_str.clone(),
+        status: InitializationStatus::Initializing,
+        error: None,
+    }
+    .emit(&app_handle);
 
-        tokio::select! {
-            result = tokio::time::timeout(std::time::Duration::from_secs(300), unit_input_rx) => {
-                result
-                    .map_err(|_| "Unit input timeout: no serial number received within 5 minutes".to_string())
-                    .and_then(|r| r.map_err(|_| "Unit input channel closed before receiving serial number".to_string()))
-            }
-            _ = async {
-                loop {
-                    // Check if cancelled via stop/kill
-                    let pending = orchestrator_state_for_cancel.pending_unit_inputs.lock().await;
-                    if !pending.contains_key(&execution_id_for_cancel) {
-                        break;
-                    }
-                    drop(pending);
+    // === START BACKGROUND INITIALIZATION ===
+    let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let cancelled_clone = cancelled.clone();
+    let app_handle_for_init = app_handle.clone();
+    let execution_id_for_init = execution_id_str.clone();
+    let procedure_def_for_init = procedure_def.clone();
+    let procedure_dir_for_init = procedure_dir_path.clone();
 
-                    // Check if shutdown requested
-                    let state = state_arc_for_cancel.read().await;
-                    if state.shutdown_requested || state.force_kill_requested {
-                        break;
-                    }
-                    drop(state);
+    let init_handle = tokio::spawn(async move {
+        // Check cancellation before starting
+        if cancelled_clone.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err("Initialization cancelled".to_string());
+        }
 
-                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        // Create orchestrator
+        let mut orchestrator = Orchestrator::new(
+            worker_count,
+            procedure_dir_for_init.clone(),
+            execution_id_for_init.clone(),
+            execution_id_for_init.clone(),
+            procedure_def_for_init,
+        );
+        orchestrator.set_app_handle(app_handle_for_init.clone());
+
+        // Check cancellation before heavy initialization
+        if cancelled_clone.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err("Initialization cancelled".to_string());
+        }
+
+        // Initialize workers (this runs uv sync and spawns Python processes)
+        if let Err(e) = orchestrator.initialize().await {
+            log::error!("Worker initialization failed: {}", e);
+            return Err(format!("Failed to initialize workers: {}", e));
+        }
+
+        // Check cancellation AFTER init - if cancelled, clean up workers before returning
+        if cancelled_clone.load(std::sync::atomic::Ordering::Relaxed) {
+            log::debug!("Initialization cancelled after workers started, shutting down workers");
+            let _ = orchestrator.shutdown(None).await;
+            return Err("Initialization cancelled".to_string());
+        }
+
+        Ok(crate::execution::InitializationResult {
+            orchestrator,
+            python_cmd: String::new(), // Not needed, workers already started
+        })
+    });
+
+    // Store pending initialization so stop/kill can cancel it
+    {
+        let mut pending_inits = orchestrator_state.pending_initializations.lock().await;
+        pending_inits.insert(
+            execution_id_str.clone(),
+            crate::execution::PendingInitialization {
+                handle: Arc::new(TokioMutex::new(Some(init_handle))),
+                cancelled: cancelled.clone(),
+            },
+        );
+    }
+
+    // === WAIT FOR UNIT INPUT (with cancellation checks) ===
+    let orchestrator_state_for_cancel = (*orchestrator_state).clone();
+    let execution_id_for_cancel = execution_id_str.clone();
+
+    let unit_info_result = tokio::select! {
+        result = tokio::time::timeout(std::time::Duration::from_secs(300), unit_input_rx) => {
+            result
+                .map_err(|_| "Unit input timeout: no serial number received within 5 minutes".to_string())
+                .and_then(|r| r.map_err(|_| "Unit input channel closed before receiving serial number".to_string()))
+        }
+        _ = async {
+            loop {
+                // Check if cancelled via stop/kill
+                let pending = orchestrator_state_for_cancel.pending_unit_inputs.lock().await;
+                if !pending.contains_key(&execution_id_for_cancel) {
+                    break;
                 }
-            } => {
-                Err("Execution cancelled during unit identification".to_string())
+                drop(pending);
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             }
+        } => {
+            Err("Execution cancelled during unit identification".to_string())
         }
     };
 
+    // Handle unit input result
     let unit_info = match unit_info_result {
         Ok(info) => info,
         Err(e) => {
             log::debug!("Unit input cancelled or failed: {}", e);
+
+            // Cancel background initialization
+            cancelled.store(true, std::sync::atomic::Ordering::Relaxed);
+
+            // Take and abort pending initialization handle
+            {
+                let mut pending_inits = orchestrator_state.pending_initializations.lock().await;
+                if let Some(pending) = pending_inits.remove(&execution_id_str) {
+                    let mut handle_guard = pending.handle.lock().await;
+                    if let Some(handle) = handle_guard.take() {
+                        handle.abort();
+                    }
+                }
+            }
 
             // Check if this was already handled by stop/kill
             let was_already_cancelled = {
@@ -274,11 +327,8 @@ pub async fn execute_parallel_runs(
             };
 
             if was_already_cancelled {
-                // User clicked stop/kill - cleanup already handled by cancel_pending_unit_input
-                // Return Ok to avoid showing error toast
                 return Ok(execution_id_str);
             } else {
-                // Genuine error - emit cleanup and return error
                 emit_cancellation_cleanup(&execution_id_str, &e, &orchestrator_state, &app_handle).await;
                 return Err(e);
             }
@@ -290,7 +340,125 @@ pub async fn execute_parallel_runs(
         unit_info.serial_number.as_deref().unwrap_or("none")
     );
 
-    // Store unit info in orchestrator so initialize_report_managers can use it
+    // === WAIT FOR INITIALIZATION TO COMPLETE ===
+    // User has submitted unit input, now we need to wait for init if not done
+    // IMPORTANT: We take the handle but keep the entry in pending_inits until refs are stored.
+    // This prevents a race condition where stop_execution can't find the execution.
+    let init_handle = {
+        let pending_inits = orchestrator_state.pending_initializations.lock().await;
+        match pending_inits.get(&execution_id_str) {
+            Some(pending) => {
+                let mut handle_guard = pending.handle.lock().await;
+                handle_guard.take() // Take handle, leave entry with None
+            }
+            None => None, // Entry was removed (cancelled)
+        }
+    };
+
+    let init_result = match init_handle {
+        Some(handle) => handle.await,
+        None => {
+            // Init was already cancelled
+            return Err("Initialization was cancelled".to_string());
+        }
+    };
+
+    // Handle initialization result and store refs ATOMICALLY
+    // This ensures stop_execution can always find the orchestrator via state_refs
+    let orchestrator_arc = match init_result {
+        Ok(Ok(result)) => {
+            let orchestrator = result.orchestrator;
+
+            // Store refs IMMEDIATELY after init completes, before any other operation
+            let state_arc = orchestrator.state.clone();
+            let workers_arc = orchestrator.workers.clone();
+            let resource_manager_arc = orchestrator.resource_manager.clone();
+            let orchestrator_arc = Arc::new(TokioMutex::new(orchestrator));
+
+            {
+                let mut orchestrators = orchestrator_state.orchestrators.lock().await;
+                orchestrators.insert(execution_id_str.clone(), orchestrator_arc.clone());
+            }
+            {
+                let mut state_refs = orchestrator_state.state_refs.lock().await;
+                state_refs.insert(execution_id_str.clone(), state_arc.clone());
+            }
+            {
+                let mut worker_refs = orchestrator_state.worker_refs.lock().await;
+                worker_refs.insert(execution_id_str.clone(), workers_arc.clone());
+            }
+            {
+                let mut resource_manager_refs = orchestrator_state.resource_manager_refs.lock().await;
+                resource_manager_refs.insert(execution_id_str.clone(), resource_manager_arc.clone());
+            }
+
+            // Remove from pending_inits now that refs are stored
+            // stop/kill can now find this execution via state_refs
+            {
+                let mut pending_inits = orchestrator_state.pending_initializations.lock().await;
+                pending_inits.remove(&execution_id_str);
+            }
+
+            // Emit initialization status: ready
+            let _ = InitializationStatusEvent {
+                execution_id: execution_id_str.clone(),
+                status: InitializationStatus::Ready,
+                error: None,
+            }
+            .emit(&app_handle);
+
+            orchestrator_arc
+        }
+        Ok(Err(e)) => {
+            log::error!("Initialization failed: {}", e);
+            // Emit initialization status: failed
+            let _ = InitializationStatusEvent {
+                execution_id: execution_id_str.clone(),
+                status: InitializationStatus::Failed,
+                error: Some(e.clone()),
+            }
+            .emit(&app_handle);
+
+            // Clean up pending state
+            {
+                let mut pending = orchestrator_state.pending_unit_inputs.lock().await;
+                pending.remove(&execution_id_str);
+            }
+            {
+                let mut pending_inits = orchestrator_state.pending_initializations.lock().await;
+                pending_inits.remove(&execution_id_str);
+            }
+
+            emit_cancellation_cleanup(&execution_id_str, &e, &orchestrator_state, &app_handle).await;
+            return Err(e);
+        }
+        Err(e) => {
+            let error_msg = format!("Initialization task panicked: {}", e);
+            log::error!("{}", error_msg);
+            // Emit initialization status: failed
+            let _ = InitializationStatusEvent {
+                execution_id: execution_id_str.clone(),
+                status: InitializationStatus::Failed,
+                error: Some(error_msg.clone()),
+            }
+            .emit(&app_handle);
+
+            // Clean up pending state
+            {
+                let mut pending = orchestrator_state.pending_unit_inputs.lock().await;
+                pending.remove(&execution_id_str);
+            }
+            {
+                let mut pending_inits = orchestrator_state.pending_initializations.lock().await;
+                pending_inits.remove(&execution_id_str);
+            }
+
+            emit_cancellation_cleanup(&execution_id_str, &error_msg, &orchestrator_state, &app_handle).await;
+            return Err(error_msg);
+        }
+    };
+
+    // === SETUP PROCEDURE AND START EXECUTION ===
     {
         let mut orchestrator = orchestrator_arc.lock().await;
         orchestrator.set_initial_unit_info(unit_info.clone());
@@ -550,6 +718,43 @@ pub async fn stop_execution(
 
     let actual_execution_id = resolve_execution_id(&execution_id, &orchestrator_state).await;
 
+    // Cancel pending initialization if any - don't abort, let task clean up workers
+    {
+        let pending_inits = orchestrator_state.pending_initializations.lock().await;
+        if let Some(pending) = pending_inits.get(&actual_execution_id) {
+            log::debug!("Cancelling pending initialization for '{}'", actual_execution_id);
+            pending.cancelled.store(true, std::sync::atomic::Ordering::Relaxed);
+
+            // Try to take the handle - if None, main flow already took it and will handle cleanup
+            let handle = {
+                let mut handle_guard = pending.handle.lock().await;
+                handle_guard.take()
+            };
+
+            if let Some(handle) = handle {
+                // Spawn cleanup task to wait for init to finish and clean up workers
+                tokio::spawn(async move {
+                    match handle.await {
+                        Ok(Ok(result)) => {
+                            // Orchestrator was created but we cancelled, shut it down
+                            log::debug!("Cleaning up orchestrator after cancellation");
+                            let mut orchestrator = result.orchestrator;
+                            let _ = orchestrator.shutdown(None).await;
+                        }
+                        Ok(Err(_)) => {
+                            // Init failed or was cancelled internally, cleanup already done
+                        }
+                        Err(_) => {
+                            // Task panicked, nothing to clean up
+                        }
+                    }
+                });
+            } else {
+                log::debug!("Handle already taken by main flow, cleanup will happen there");
+            }
+        }
+    }
+
     if cancel_pending_unit_input(
         &actual_execution_id,
         &orchestrator_state,
@@ -638,6 +843,43 @@ pub async fn kill_execution(
     log::debug!("kill_execution called for '{}'", execution_id);
 
     let actual_execution_id = resolve_execution_id(&execution_id, &orchestrator_state).await;
+
+    // Cancel pending initialization if any - don't abort, let task clean up workers
+    {
+        let pending_inits = orchestrator_state.pending_initializations.lock().await;
+        if let Some(pending) = pending_inits.get(&actual_execution_id) {
+            log::debug!("Killing pending initialization for '{}'", actual_execution_id);
+            pending.cancelled.store(true, std::sync::atomic::Ordering::Relaxed);
+
+            // Try to take the handle - if None, main flow already took it and will handle cleanup
+            let handle = {
+                let mut handle_guard = pending.handle.lock().await;
+                handle_guard.take()
+            };
+
+            if let Some(handle) = handle {
+                // Spawn cleanup task to wait for init to finish and force-kill workers
+                tokio::spawn(async move {
+                    match handle.await {
+                        Ok(Ok(result)) => {
+                            // Orchestrator was created but we killed, force shutdown
+                            log::debug!("Force killing orchestrator workers after kill");
+                            let mut orchestrator = result.orchestrator;
+                            let _ = orchestrator.shutdown(None).await;
+                        }
+                        Ok(Err(_)) => {
+                            // Init failed or was cancelled internally, cleanup already done
+                        }
+                        Err(_) => {
+                            // Task panicked, nothing to clean up
+                        }
+                    }
+                });
+            } else {
+                log::debug!("Handle already taken by main flow, force kill will happen there");
+            }
+        }
+    }
 
     if cancel_pending_unit_input(
         &actual_execution_id,

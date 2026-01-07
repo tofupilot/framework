@@ -5,6 +5,7 @@
 pub mod commands;
 pub mod identifier;
 pub mod venv;
+pub mod version_constraint;
 
 #[cfg(test)]
 mod tests;

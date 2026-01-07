@@ -107,6 +107,22 @@ impl Worker {
             .canonicalize()
             .map_err(|e| format!("Failed to canonicalize procedure dir: {}", e))?;
 
+        let python_cmd =
+            crate::python::resolve_python_internal(app_handle, &abs_procedure_dir).await?;
+
+        self.start_with_python(app_handle, &python_cmd).await
+    }
+
+    pub async fn start_with_python(
+        &mut self,
+        app_handle: Option<&AppHandle>,
+        python_cmd: &str,
+    ) -> Result<(), String> {
+        let abs_procedure_dir = self
+            .procedure_dir
+            .canonicalize()
+            .map_err(|e| format!("Failed to canonicalize procedure dir: {}", e))?;
+
         let worker_script = if let Some(handle) = app_handle {
             handle
                 .path()
@@ -122,13 +138,10 @@ impl Worker {
             worker_script.display()
         );
 
-        let python_cmd =
-            crate::python::resolve_python_internal(app_handle, &abs_procedure_dir).await?;
-
         let worker_id = self.id;
 
         let process = GrpcProcess::spawn(
-            &python_cmd,
+            python_cmd,
             worker_script,
             vec![abs_procedure_dir.to_string_lossy().to_string()],
             Some(&abs_procedure_dir),

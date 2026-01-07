@@ -22,10 +22,24 @@ impl Orchestrator {
         // Start all workers (app_handle is optional for CLI mode)
         let app_handle = self.app_handle.as_ref();
 
+        // Resolve python ONCE before starting workers
+        let python_cmd =
+            crate::python::resolve_python_internal(app_handle, &self.procedure_dir).await?;
+
+        // Start all workers in parallel with the pre-resolved python path
         let mut workers = self.workers.write().await;
-        for worker in workers.iter_mut() {
-            worker.start(app_handle).await?;
+        let start_futures: Vec<_> = workers
+            .iter_mut()
+            .map(|worker| worker.start_with_python(app_handle, &python_cmd))
+            .collect();
+
+        let results = futures::future::join_all(start_futures).await;
+
+        // Check for any errors
+        for result in results {
+            result?;
         }
+
         Ok(())
     }
 

@@ -1,5 +1,6 @@
 //! Venv operations: inspect, sync, delete, auto-resolve Python executable.
 
+use super::version_constraint::{compute_effective_constraint, parse_requires_python, ConstraintResult, RequiresPythonGuard, STUDIO_MIN_VERSION};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::path::{Path, PathBuf};
@@ -7,6 +8,9 @@ use tauri::AppHandle;
 use tauri_plugin_shell::process::CommandEvent;
 use tauri_plugin_shell::ShellExt;
 use tauri_specta::Event;
+use toml_edit::{DocumentMut, Item, Table};
+
+const STUDIO_DEPENDENCIES: &[&str] = &["grpcio>=1.76.0", "portpicker", "protobuf"];
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type, tauri_specta::Event)]
 pub struct PythonInstallOutputEvent(pub String);
@@ -33,8 +37,6 @@ pub struct PythonState {
 
 #[derive(Deserialize)]
 struct Manifest {
-    #[serde(default, rename = "requires-python")]
-    requires_python: Option<String>,
     #[serde(default)]
     dependencies: Vec<String>,
 }
@@ -60,195 +62,58 @@ fn get_dependencies(project_path: &Path) -> Vec<String> {
         .unwrap_or_default()
 }
 
-pub(crate) fn get_python_version_requirement(project_path: &Path) -> Option<String> {
-    read_pyproject(project_path)?.requires_python
-}
-
-async fn install_worker_dependencies(app: &AppHandle, project_path: &Path) -> Result<(), String> {
-    log::info!("Installing worker dependencies via uv pip install");
-
-    let venv_info = find_python_executable(project_path).and_then(|python_path| {
-        let venv_path = python_path.parent()?.parent()?.to_path_buf();
-        Some(venv_path)
-    }).ok_or("No venv found")?;
-
-    let output = app
-        .shell()
-        .sidecar("uv")
-        .map_err(|e| format!("UV binary not found: {}", e))?
-        .args(&["pip", "install", "grpcio", "portpicker", "protobuf"])
-        .env("VIRTUAL_ENV", venv_info.to_string_lossy().as_ref())
-        .current_dir(project_path)
-        .output()
-        .await
-        .map_err(|e| format!("Failed to install worker dependencies: {}", e))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("UV pip install failed: {}", stderr));
+fn build_studio_deps_array() -> toml_edit::Array {
+    let mut arr = toml_edit::Array::new();
+    for name in STUDIO_DEPENDENCIES {
+        arr.push(*name);
     }
-
-    log::info!("Worker dependencies installed successfully");
-    Ok(())
-}
-
-fn install_worker_dependencies_cli(project_path: &Path) -> Result<(), String> {
-    log::info!("Installing worker dependencies via uv pip install (CLI mode)");
-
-    let venv_info = find_python_executable(project_path)
-        .and_then(|python_path| {
-            let venv_path = python_path.parent()?.parent()?.to_path_buf();
-            Some(venv_path)
-        })
-        .ok_or("No venv found")?;
-
-    let output = std::process::Command::new("uv")
-        .args(["pip", "install", "grpcio", "portpicker", "protobuf"])
-        .env("VIRTUAL_ENV", &venv_info)
-        .current_dir(project_path)
-        .output()
-        .map_err(|e| format!("Failed to run uv: {}", e))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("UV pip install failed: {}", stderr));
-    }
-
-    log::info!("Worker dependencies installed successfully");
-    Ok(())
+    arr
 }
 
 #[cfg(test)]
-pub(crate) fn create_manifest(project_path: &Path) -> Result<(), String> {
-    let pyproject_path = project_path.join("pyproject.toml");
-    if pyproject_path.exists() {
-        return Ok(());
-    }
-
-    std::fs::write(&pyproject_path, "[project]\nname = \"procedure\"\nversion = \"0.1.0\"\nrequires-python = \">=3.11\"\ndependencies = []\n")
-        .map_err(|e| format!("Failed to write pyproject.toml: {}", e))
+pub(crate) fn ensure_manifest_with_studio_deps(project_path: &Path) -> Result<(), String> {
+    ensure_manifest_with_studio_deps_impl(project_path)
 }
 
 #[cfg(not(test))]
-fn create_manifest(project_path: &Path) -> Result<(), String> {
+fn ensure_manifest_with_studio_deps(project_path: &Path) -> Result<(), String> {
+    ensure_manifest_with_studio_deps_impl(project_path)
+}
+
+fn ensure_manifest_with_studio_deps_impl(project_path: &Path) -> Result<(), String> {
     let pyproject_path = project_path.join("pyproject.toml");
-    if pyproject_path.exists() {
-        return Ok(());
+
+    let content = if pyproject_path.exists() {
+        std::fs::read_to_string(&pyproject_path)
+            .map_err(|e| format!("Failed to read pyproject.toml: {}", e))?
+    } else {
+        "[project]\nname = \"procedure\"\nversion = \"0.1.0\"\nrequires-python = \">=3.9\"\ndependencies = []\n".to_string()
+    };
+
+    let mut doc: DocumentMut = content
+        .parse()
+        .map_err(|e| format!("Failed to parse pyproject.toml: {}", e))?;
+
+    let studio_deps = build_studio_deps_array();
+
+    // Always update the studio group to ensure correct dependencies
+    if let Some(dg) = doc.get_mut("dependency-groups") {
+        if let Some(table) = dg.as_table_mut() {
+            table.insert("studio", Item::Value(toml_edit::Value::Array(studio_deps)));
+        }
+    } else {
+        let mut dg_table = Table::new();
+        dg_table.insert("studio", Item::Value(toml_edit::Value::Array(studio_deps)));
+        doc.insert("dependency-groups", Item::Table(dg_table));
     }
 
-    std::fs::write(&pyproject_path, "[project]\nname = \"procedure\"\nversion = \"0.1.0\"\nrequires-python = \">=3.11\"\ndependencies = []\n")
-        .map_err(|e| format!("Failed to write pyproject.toml: {}", e))
+    std::fs::write(&pyproject_path, doc.to_string())
+        .map_err(|e| format!("Failed to write pyproject.toml: {}", e))?;
+
+    log::info!("Updated [dependency-groups].studio in pyproject.toml");
+    Ok(())
 }
 
-#[cfg(test)]
-pub(crate) fn version_matches(installed: &str, required: &str) -> bool {
-    version_matches_impl(installed, required)
-}
-
-#[cfg(not(test))]
-fn version_matches(installed: &str, required: &str) -> bool {
-    version_matches_impl(installed, required)
-}
-
-fn version_matches_impl(installed: &str, required: &str) -> bool {
-    if installed == required {
-        return true;
-    }
-
-    if installed.starts_with(&format!("{}.", required)) {
-        return true;
-    }
-
-    let installed_parts: Vec<&str> = installed.split('.').collect();
-    let required_parts: Vec<&str> = required.split('.').collect();
-
-    required_parts.iter().enumerate().all(|(i, req_part)| {
-        installed_parts.get(i).map_or(false, |inst_part| inst_part == req_part)
-    })
-}
-
-async fn list_uv_pythons(app: &AppHandle) -> Result<Vec<String>, String> {
-    log::debug!("Listing UV-managed Python installations");
-
-    let output = app
-        .shell()
-        .sidecar("uv")
-        .map_err(|e| format!("UV binary not found: {}", e))?
-        .args(["python", "list"])
-        .output()
-        .await
-        .map_err(|e| format!("Failed to list UV Pythons: {}", e))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("UV python list failed: {}", stderr));
-    }
-
-    let versions: Vec<String> = String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .filter_map(|line| {
-            let line = line.trim();
-            if line.is_empty() {
-                return None;
-            }
-
-            line.strip_prefix("cpython-")
-                .or(Some(line))
-                .and_then(|s| s.split_whitespace().next())
-                .map(String::from)
-        })
-        .collect();
-
-    log::debug!("Found {} UV-managed Python versions: {:?}", versions.len(), versions);
-    Ok(versions)
-}
-
-async fn install_uv_python(app: &AppHandle, version: &str) -> Result<String, String> {
-    log::info!("Installing Python {} via UV", version);
-
-    let output = app
-        .shell()
-        .sidecar("uv")
-        .map_err(|e| format!("UV binary not found: {}", e))?
-        .args(["python", "install", version])
-        .output()
-        .await
-        .map_err(|e| format!("Failed to install Python {}: {}", version, e))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        return Err(format!(
-            "UV python install {} failed:\nStderr: {}\nStdout: {}",
-            version, stderr, stdout
-        ));
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    log::info!("Successfully installed Python {}: {}", version, stdout.trim());
-    Ok(stdout.trim().to_string())
-}
-
-async fn ensure_python_available(app: &AppHandle, version: &str) -> Result<String, String> {
-    log::info!("Ensuring Python {} is available via UV", version);
-
-    let installed_versions = list_uv_pythons(app).await?;
-
-    if let Some(installed) = installed_versions.iter().find(|v| version_matches(v, version)) {
-        log::debug!("Python {} already installed (found {})", version, installed);
-        return Ok(installed.clone());
-    }
-
-    log::info!("Python {} not found, installing via UV", version);
-    install_uv_python(app, version).await?;
-
-    let updated_versions = list_uv_pythons(app).await?;
-    updated_versions
-        .iter()
-        .find(|v| version_matches(v, version))
-        .cloned()
-        .ok_or_else(|| format!("Failed to verify Python {} installation after install", version))
-}
 
 #[cfg(test)]
 pub(crate) fn find_python_executable(project_path: &Path) -> Option<PathBuf> {
@@ -404,11 +269,29 @@ pub async fn sync_python(app: AppHandle, procedure_dir: String) -> Result<(), St
 
     log::info!("Syncing dependencies for venv: {}", venv_name);
 
+    ensure_manifest_with_studio_deps(path)?;
+
+    let user_constraint = parse_requires_python(path);
+    let effective_constraint = match compute_effective_constraint(user_constraint.as_deref()) {
+        ConstraintResult::Effective(c) => c,
+        ConstraintResult::Incompatible { user_constraint } => {
+            return Err(format!(
+                "TofuPilot Studio requires Python >={}.{}, but your project specifies '{}' which has no compatible versions.",
+                STUDIO_MIN_VERSION.0, STUDIO_MIN_VERSION.1, user_constraint
+            ));
+        }
+    };
+
+    log::info!("Using effective Python constraint: {}", effective_constraint);
+
+    // Temporarily update requires-python for UV resolution (restored on drop)
+    let _guard = RequiresPythonGuard::new(path, &effective_constraint)?;
+
     let (mut rx, _child) = app
         .shell()
         .sidecar("uv")
         .map_err(|e| format!("UV sidecar not found: {}", e))?
-        .args(&["sync"])
+        .args(&["sync", "--group", "studio", "--python", &effective_constraint])
         .env("UV_PROJECT_ENVIRONMENT", &venv_name)
         .current_dir(path)
         .spawn()
@@ -430,6 +313,8 @@ pub async fn sync_python(app: AppHandle, procedure_dir: String) -> Result<(), St
             _ => {}
         }
     }
+
+    // _guard is dropped here, restoring original pyproject.toml
 
     Ok(())
 }
@@ -456,79 +341,69 @@ pub async fn resolve_python_internal(
     app: Option<&AppHandle>,
     project_path: &Path,
 ) -> Result<String, String> {
-    if let Some(python_path) = find_python_executable(project_path) {
-        log::info!("Using existing venv Python: {}", python_path.display());
+    ensure_manifest_with_studio_deps(project_path)?;
 
-        if let Some(app_handle) = app {
-            install_worker_dependencies(app_handle, project_path).await.ok();
-        } else {
-            install_worker_dependencies_cli(project_path).ok();
+    let user_constraint = parse_requires_python(project_path);
+    let effective_constraint = match compute_effective_constraint(user_constraint.as_deref()) {
+        ConstraintResult::Effective(c) => c,
+        ConstraintResult::Incompatible { user_constraint } => {
+            return Err(format!(
+                "TofuPilot Studio requires Python >={}.{}, but your project specifies '{}' which has no compatible versions.",
+                STUDIO_MIN_VERSION.0, STUDIO_MIN_VERSION.1, user_constraint
+            ));
         }
+    };
 
-        return Ok(python_path.to_string_lossy().to_string());
+    log::info!("Running uv sync --group studio --python {}", effective_constraint);
+
+    // Temporarily update requires-python for UV resolution (restored on drop)
+    let _guard = RequiresPythonGuard::new(project_path, &effective_constraint)?;
+
+    let (success, stdout, stderr) = if let Some(app_handle) = app {
+        // GUI mode: use Tauri sidecar
+        let output = app_handle
+            .shell()
+            .sidecar("uv")
+            .map_err(|e| format!("UV binary not found: {}", e))?
+            .args(&["sync", "--group", "studio", "--python", &effective_constraint])
+            .env("UV_PROJECT_ENVIRONMENT", ".venv")
+            .current_dir(project_path)
+            .output()
+            .await
+            .map_err(|e| format!("Failed to run uv sync: {}", e))?;
+        (output.status.success(), output.stdout, output.stderr)
+    } else {
+        // CLI mode: use std::process::Command
+        let output = std::process::Command::new("uv")
+            .args(["sync", "--group", "studio", "--python", &effective_constraint])
+            .env("UV_PROJECT_ENVIRONMENT", ".venv")
+            .current_dir(project_path)
+            .output()
+            .map_err(|e| format!("Failed to run uv sync: {}", e))?;
+        (output.status.success(), output.stdout, output.stderr)
+    };
+
+    // _guard is dropped here, restoring original pyproject.toml
+
+    if !success {
+        let stderr = String::from_utf8_lossy(&stderr);
+        let stdout = String::from_utf8_lossy(&stdout);
+        return Err(format!(
+            "uv sync --group studio failed:\nStderr: {}\nStdout: {}",
+            stderr.trim(),
+            stdout.trim()
+        ));
     }
 
-    let app_handle = app.ok_or_else(|| {
-        "Python resolution requires app handle for UV operations.\n\
-         This is an internal error - please report this issue."
-            .to_string()
-    })?;
-
-    create_manifest(project_path).ok();
-
-    let version_requirement = get_python_version_requirement(project_path);
-    let version = version_requirement
-        .as_ref()
-        .map(|spec| {
-            spec.chars()
-                .skip_while(|c| !c.is_ascii_digit())
-                .take_while(|c| c.is_ascii_digit() || *c == '.')
-                .collect::<String>()
-                .split('.')
-                .take(2)
-                .collect::<Vec<_>>()
-                .join(".")
-        })
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "3.11".to_string());
-
-    log::info!("No venv found. Installing Python {} via UV", version);
-    if let Some(ref req) = version_requirement {
-        log::info!("pyproject.toml requires-python: {}", req);
-    }
-
-    ensure_python_available(app_handle, &version)
-        .await
-        .map_err(|e| format!("Failed to install Python {}: {}", version, e))?;
-
-    log::info!("Python {} available. Creating venv with `uv sync`", version);
-
-    let venv_name = ".venv";
-    let (mut rx, _child) = app_handle
-        .shell()
-        .sidecar("uv")
-        .map_err(|e| format!("UV sidecar not found: {}", e))?
-        .args(&["sync"])
-        .env("UV_PROJECT_ENVIRONMENT", venv_name)
-        .current_dir(project_path)
-        .spawn()
-        .map_err(|e| format!("Failed to spawn UV sync: {}", e))?;
-
-    while let Some(event) = rx.recv().await {
-        if let CommandEvent::Stdout(line) | CommandEvent::Stderr(line) = event {
-            log::info!("UV: {}", String::from_utf8_lossy(&line));
-        } else if matches!(event, CommandEvent::Terminated(_)) {
-            log::info!("UV sync completed");
-            break;
-        }
-    }
-
-    install_worker_dependencies(app_handle, project_path).await?;
+    log::info!("uv sync completed successfully");
 
     let python_path = find_python_executable(project_path)
         .ok_or_else(|| "Python executable not found after uv sync".to_string())?;
 
-    log::info!("Successfully created venv at: {}", python_path.parent().unwrap().parent().unwrap().display());
+    log::info!(
+        "Python ready at: {}",
+        python_path.display()
+    );
     Ok(python_path.to_string_lossy().to_string())
 }
 

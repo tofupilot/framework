@@ -45,6 +45,10 @@ pub fn run() {
             procedure::commands::load_procedure,
             procedure::commands::read_procedure_file,
             procedure::commands::write_procedure_file,
+            procedure::commands::create_directory,
+            procedure::commands::list_yaml_files,
+            procedure::commands::list_subdirectories,
+            procedure::commands::delete_directory,
             // Editor commands
             editor::commands::watch_yaml_file,
             editor::commands::unwatch_yaml_file,
@@ -73,6 +77,7 @@ pub fn run() {
             execution::events::PlugLogEvent,
             execution::events::UiUpdateEvent,
             execution::commands::UnitInputRequestEvent,
+            execution::commands::InitializationStatusEvent,
             execution::commands::ExecutionProgressEvent,
             execution::commands::ExecutionCompleteEventPayload,
             execution::commands::OrchestratorCleanupCompleteEvent,

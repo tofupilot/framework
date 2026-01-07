@@ -39,6 +39,22 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::{oneshot, Mutex as TokioMutex};
 
+/// Result of a background initialization task
+pub struct InitializationResult {
+    pub orchestrator: Orchestrator,
+    pub python_cmd: String,
+}
+
+/// Pending initialization task for an execution.
+/// The handle is wrapped in Arc<Mutex<Option<>>> so it can be taken for awaiting
+/// while keeping the entry in the map. This prevents a race condition where
+/// stop_execution can't find the execution during the gap between awaiting
+/// the handle and storing orchestrator refs.
+pub struct PendingInitialization {
+    pub handle: Arc<TokioMutex<Option<tokio::task::JoinHandle<Result<InitializationResult, String>>>>>,
+    pub cancelled: Arc<std::sync::atomic::AtomicBool>,
+}
+
 #[derive(Clone)]
 pub struct OrchestratorState {
     pub orchestrators: Arc<TokioMutex<HashMap<String, Arc<TokioMutex<Orchestrator>>>>>,
@@ -49,6 +65,7 @@ pub struct OrchestratorState {
     pub resource_manager_refs:
         Arc<TokioMutex<HashMap<String, Arc<tokio::sync::RwLock<crate::plugs::manager::ResourceManager>>>>>,
     pub pending_unit_inputs: Arc<TokioMutex<HashMap<String, PendingUnitInput>>>,
+    pub pending_initializations: Arc<TokioMutex<HashMap<String, PendingInitialization>>>,
 }
 
 impl Default for OrchestratorState {
@@ -59,6 +76,7 @@ impl Default for OrchestratorState {
             worker_refs: Arc::new(TokioMutex::new(HashMap::new())),
             resource_manager_refs: Arc::new(TokioMutex::new(HashMap::new())),
             pending_unit_inputs: Arc::new(TokioMutex::new(HashMap::new())),
+            pending_initializations: Arc::new(TokioMutex::new(HashMap::new())),
         }
     }
 }
