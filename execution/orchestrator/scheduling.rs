@@ -46,6 +46,9 @@ impl Orchestrator {
                 if !shutdown_events_emitted {
                     shutdown_events_emitted = true;
 
+                    // Close all pending UI response channels to unblock phases waiting for input
+                    crate::features::operator_ui::channels::close_all_ui_channels().await;
+
                     // Emit stopping status for running jobs
                     for worker_id in 0..state.worker_state.num_workers() {
                         if let Some(job_id) = state.worker_state.get_worker_job(worker_id) {

@@ -27,6 +27,9 @@ impl Orchestrator {
         app_handle: Option<AppHandle>,
         _permit: tokio::sync::OwnedSemaphorePermit,
     ) -> Result<(), String> {
+        // Set initial unit info on job for Python access
+        job.initial_unit_info = self.initial_unit_info.clone();
+
         // Track phase in display systems
         {
             let state = self.state.read().await;

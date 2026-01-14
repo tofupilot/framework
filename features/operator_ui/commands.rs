@@ -22,7 +22,7 @@ pub async fn submit_native_ui_response(
     values: HashMap<String, UiResponseValue>,
     bound_measurements: Option<HashMap<String, UiResponseValue>>,
 ) -> Result<(), String> {
-    log::debug!(
+    log::info!(
         "🎯 submit_native_ui_response: request_id={}, bound_measurements={:?}",
         request_id, bound_measurements
     );

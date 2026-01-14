@@ -261,6 +261,17 @@ impl Worker {
             None
         };
 
+        // Build unit_info for gRPC if available
+        let grpc_unit_info = job.initial_unit_info.as_ref().map(|ui| {
+            super::grpc::UnitInfo {
+                serial_number: ui.serial_number.clone(),
+                part_number: ui.part_number.clone(),
+                revision_number: ui.revision_number.clone(),
+                batch_number: ui.batch_number.clone(),
+                sub_units: ui.sub_units.clone().unwrap_or_default(),
+            }
+        });
+
         // Build gRPC command
         let command = JobCommand {
             job_id: job.id.to_string(),
@@ -284,6 +295,7 @@ impl Worker {
             timeout_ms: job.timeout_ms,
             retry_count: job.retry_count as u32,
             retry_limit: job.retry_limit as u32,
+            unit_info: grpc_unit_info,
         };
 
         let mut client = {
@@ -313,12 +325,18 @@ impl Worker {
             match event.event {
                 Some(Event::JobComplete(grpc_result)) => {
                     // If UI requires user input, wait for submission before completing
+                    // and extract any bound unit info from the UI response
+                    let mut ui_unit_info: Option<crate::execution::types::UnitInfo> = None;
                     if let Some(rx) = ui_response_rx {
                         log::debug!("Python phase {} finished, waiting for UI submission", job.phase_name);
 
                         match rx.await {
-                            Ok(_ui_values) => {
+                            Ok(ui_values) => {
                                 log::debug!("Received UI submission for phase {}", job.phase_name);
+                                // Extract bound unit info from UI submission
+                                if let Some((unit_info, _bound)) = extract_bound_measurements(&ui_values) {
+                                    ui_unit_info = unit_info;
+                                }
                             }
                             Err(_) => {
                                 log::warn!("UI response channel closed for phase {}", job.phase_name);
@@ -329,7 +347,14 @@ impl Worker {
                     let end_time = chrono::Utc::now();
 
                     // Convert gRPC result to JobResult
-                    return self.convert_job_result(grpc_result, start_time, end_time, job);
+                    let mut job_result = self.convert_job_result(grpc_result, start_time, end_time, job)?;
+
+                    // Merge UI unit info if present
+                    if let Some(ui_unit) = ui_unit_info {
+                        job_result.unit = Some(merge_unit_info(job_result.unit, ui_unit));
+                    }
+
+                    return Ok(job_result);
                 }
                 Some(Event::Error(err)) => {
                     return Err(err.message);
@@ -896,10 +921,10 @@ fn extract_unit_info_from_json(
         .map(String::from);
 
     let sub_units = unit_data.get("sub_units").and_then(|v| {
-        if let Some(arr) = v.as_array() {
-            let parsed: Vec<String> = arr
+        if let Some(obj) = v.as_object() {
+            let parsed: std::collections::HashMap<String, String> = obj
                 .iter()
-                .filter_map(|item| item.as_str().map(String::from))
+                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
                 .collect();
             if parsed.is_empty() {
                 None
@@ -928,28 +953,15 @@ fn extract_bound_measurements(
     let mut bound: HashMap<String, serde_json::Value> =
         serde_json::from_str(bound_json).ok()?;
 
-    log::debug!(
-        "📊 Extracted {} bound items from UI submission",
-        bound.len()
-    );
-
     let unit_info = if let Some(unit_value) = bound.remove("__unit__") {
-        if let Ok(unit_data) =
-            serde_json::from_value::<serde_json::Map<String, serde_json::Value>>(unit_value)
-        {
-            let info = extract_unit_info_from_json(&unit_data);
-            log::debug!(
-                "📦 Extracted unit info from UI: serial={:?}, batch={:?}, part={:?}, revision={:?}, sub_units={}",
-                info.serial_number,
-                info.batch_number,
-                info.part_number,
-                info.revision_number,
-                info.sub_units.as_ref().map(|s| s.len()).unwrap_or(0)
-            );
-            Some(info)
-        } else {
-            None
-        }
+        // Try to parse as object directly, or as JSON string
+        let unit_data_opt = match &unit_value {
+            serde_json::Value::Object(obj) => Some(obj.clone()),
+            serde_json::Value::String(s) => serde_json::from_str(s).ok(),
+            _ => None,
+        };
+
+        unit_data_opt.map(|unit_data| extract_unit_info_from_json(&unit_data))
     } else {
         None
     };
@@ -960,11 +972,6 @@ fn extract_bound_measurements(
 fn convert_bound_to_measurements(
     bound: HashMap<String, serde_json::Value>,
 ) -> Vec<crate::measurements::Measurement> {
-    log::debug!(
-        "🔗 Converting {} bound measurements",
-        bound.len()
-    );
-
     bound
         .into_iter()
         .map(|(name, value)| {
@@ -977,8 +984,6 @@ fn convert_bound_to_measurements(
                 serde_json::Value::Object(obj) => crate::measurements::MeasurementValue::Object(obj),
             };
 
-            log::debug!("  OK: Added bound measurement: {}", name);
-
             crate::measurements::Measurement {
                 name: name.clone(),
                 value: measurement_value,
@@ -990,4 +995,39 @@ fn convert_bound_to_measurements(
             }
         })
         .collect()
+}
+
+/// Merge UI unit info with existing unit info
+/// UI values take precedence for sub_units, but are merged with existing values
+fn merge_unit_info(
+    existing: Option<crate::execution::types::UnitInfo>,
+    ui_unit: crate::execution::types::UnitInfo,
+) -> crate::execution::types::UnitInfo {
+    match existing {
+        Some(mut base) => {
+            // Merge sub_units: UI values take precedence
+            if let Some(ui_sub_units) = ui_unit.sub_units {
+                let mut merged_sub_units = base.sub_units.unwrap_or_default();
+                for (key, value) in ui_sub_units {
+                    merged_sub_units.insert(key, value);
+                }
+                base.sub_units = Some(merged_sub_units);
+            }
+            // UI values override if present
+            if ui_unit.serial_number.is_some() {
+                base.serial_number = ui_unit.serial_number;
+            }
+            if ui_unit.part_number.is_some() {
+                base.part_number = ui_unit.part_number;
+            }
+            if ui_unit.revision_number.is_some() {
+                base.revision_number = ui_unit.revision_number;
+            }
+            if ui_unit.batch_number.is_some() {
+                base.batch_number = ui_unit.batch_number;
+            }
+            base
+        }
+        None => ui_unit,
+    }
 }

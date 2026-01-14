@@ -13,6 +13,45 @@ fn validate_python_identifier(key: &str) -> Result<(), validator::ValidationErro
     Ok(())
 }
 
+fn validate_sub_units_config(config: &SubUnitsConfig) -> Result<(), validator::ValidationError> {
+    // Validate items is not empty
+    if config.0.is_empty() {
+        let mut err = validator::ValidationError::new("empty_sub_units_items");
+        err.message = Some("sub_units must have at least one item".into());
+        return Err(err);
+    }
+
+    // Validate no duplicate keys (case-insensitive)
+    let mut seen_keys: HashSet<String> = HashSet::new();
+    for item in &config.0 {
+        let key = item.get_key().to_lowercase();
+        if seen_keys.contains(&key) {
+            let mut err = validator::ValidationError::new("duplicate_sub_unit_key");
+            err.message = Some(format!(
+                "Duplicate sub-unit key '{}' (from label '{}')",
+                key, item.label
+            ).into());
+            return Err(err);
+        }
+        seen_keys.insert(key);
+    }
+
+    // Validate keys produce valid Python identifiers
+    for item in &config.0 {
+        let key = item.get_key();
+        if key.is_empty() || !crate::python::identifier::is_valid_python_identifier(&key) {
+            let mut err = validator::ValidationError::new("invalid_sub_unit_key");
+            err.message = Some(format!(
+                "Sub-unit key '{}' (from label '{}') is not a valid Python identifier",
+                key, item.label
+            ).into());
+            return Err(err);
+        }
+    }
+
+    Ok(())
+}
+
 fn is_true(value: &bool) -> bool {
     *value
 }
@@ -135,14 +174,33 @@ where
     D: Deserializer<'de>,
 {
     use serde::de::Error;
-    let input: Option<String> = Option::deserialize(deserializer)?;
+
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum DurationValue {
+        String(String),
+        Number(u64),
+    }
+
+    let input: Option<DurationValue> = Option::deserialize(deserializer)?;
     match input {
         None => Ok(None),
-        Some(s) => parse_duration(&s).map(Some).map_err(Error::custom),
+        Some(DurationValue::String(s)) => parse_duration(&s).map(Some).map_err(Error::custom),
+        Some(DurationValue::Number(ms)) => Ok(Some(ms)),
     }
 }
 
 fn serialize_duration<S>(value: &Option<u64>, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    match value {
+        None => serializer.serialize_none(),
+        Some(ms) => serializer.serialize_u64(*ms),
+    }
+}
+
+fn serialize_duration_as_string<S>(value: &Option<u64>, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: Serializer,
 {
@@ -245,6 +303,7 @@ pub struct ProcedureDefinition {
     pub execution: Option<ExecutionConfig>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[validate(nested)]
     pub unit: Option<UnitConfig>,
 
     #[serde(default)]
@@ -382,7 +441,65 @@ impl Default for UnitFieldConfig {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, Default, specta::Type)]
+/// Configuration for a specific sub-unit with custom label and constraints
+#[derive(Debug, Clone, Deserialize, specta::Type)]
+pub struct SubUnitItemConfig {
+    /// Display label for this sub-unit (e.g., "Battery", "Motor")
+    #[serde(deserialize_with = "serde_trim::string_trim")]
+    pub label: String,
+
+    /// Internal key for this sub-unit (e.g., "battery", "motor")
+    /// Used for binding, reports, and internal storage
+    /// If not provided, auto-generated from label (lowercase, sanitized)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+
+    /// Optional serial number constraints for this specific sub-unit
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub serial_number: Option<UnitFieldConfig>,
+}
+
+impl serde::Serialize for SubUnitItemConfig {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut state = serializer.serialize_struct("SubUnitItemConfig", 3)?;
+        state.serialize_field("label", &self.label)?;
+        // Always serialize the computed key
+        state.serialize_field("key", &self.get_key())?;
+        state.serialize_field("serial_number", &self.serial_number)?;
+        state.end()
+    }
+}
+
+impl SubUnitItemConfig {
+    /// Get the key for this sub-unit, auto-generating from label if not provided
+    pub fn get_key(&self) -> String {
+        self.key.clone().unwrap_or_else(|| {
+            // Auto-generate key from label: lowercase and sanitize
+            crate::python::identifier::to_python_identifier(&self.label.to_lowercase())
+        })
+    }
+}
+
+/// Configuration for sub-units collection (transparent wrapper for direct array serialization)
+#[derive(Debug, Clone, Serialize, Deserialize, specta::Type)]
+#[serde(transparent)]
+pub struct SubUnitsConfig(pub Vec<SubUnitItemConfig>);
+
+impl validator::Validate for SubUnitsConfig {
+    fn validate(&self) -> Result<(), validator::ValidationErrors> {
+        validate_sub_units_config(self).map_err(|e| {
+            let mut errors = validator::ValidationErrors::new();
+            errors.add("sub_units", e);
+            errors
+        })
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default, Validate, specta::Type)]
 pub struct UnitConfig {
     /// Serial number field configuration
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -399,6 +516,11 @@ pub struct UnitConfig {
     /// Batch number field configuration (optional)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub batch_number: Option<UnitFieldConfig>,
+
+    /// Sub-units configuration (optional)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[validate(nested)]
+    pub sub_units: Option<SubUnitsConfig>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Validate, Clone, specta::Type)]
@@ -474,6 +596,36 @@ pub struct RetryConfig {
         serialize_with = "serialize_duration"
     )]
     pub delay: Option<u64>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct RetryConfigYaml {
+    pub limit: usize,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        deserialize_with = "deserialize_duration",
+        serialize_with = "serialize_duration_as_string"
+    )]
+    pub delay: Option<u64>,
+}
+
+impl From<RetryConfigYaml> for RetryConfig {
+    fn from(yaml: RetryConfigYaml) -> Self {
+        RetryConfig {
+            limit: yaml.limit,
+            delay: yaml.delay,
+        }
+    }
+}
+
+impl From<&RetryConfig> for RetryConfigYaml {
+    fn from(config: &RetryConfig) -> Self {
+        RetryConfigYaml {
+            limit: config.limit,
+            delay: config.delay,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq, specta::Type)]
@@ -772,11 +924,11 @@ pub struct PhaseDefinitionYaml {
         default,
         skip_serializing_if = "Option::is_none",
         deserialize_with = "deserialize_duration",
-        serialize_with = "serialize_duration"
+        serialize_with = "serialize_duration_as_string"
     )]
     pub timeout: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub retry: Option<RetryConfig>,
+    pub retry: Option<RetryConfigYaml>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub then: Option<ThenConfig>,
 }
@@ -861,7 +1013,7 @@ impl From<PhaseDefinitionYaml> for PhaseDefinition {
             result: yaml.result,
             depends_on: yaml.depends_on,
             timeout: yaml.timeout,
-            retry: yaml.retry,
+            retry: yaml.retry.map(|r| r.into()),
             then: yaml.then,
         }
     }
@@ -883,7 +1035,7 @@ impl PhaseDefinition {
             result: self.result.clone(),
             depends_on: self.depends_on.clone(),
             timeout: self.timeout,
-            retry: self.retry.clone(),
+            retry: self.retry.as_ref().map(|r| r.into()),
             then: self.then.clone(),
         }
     }

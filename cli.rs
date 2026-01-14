@@ -90,12 +90,30 @@ pub fn run(procedure_path: PathBuf) {
 
         // Build unit info from YAML default values
         let unit_info = if let Some(unit_config) = &procedure_def.unit {
+            // Generate sub_units dict from items
+            let sub_units = if let Some(sub_units_config) = &unit_config.sub_units {
+                let mut sub_units_map = std::collections::HashMap::new();
+                for item in &sub_units_config.0 {
+                    let default_value = item.serial_number.as_ref()
+                        .and_then(|c| c.default_value.clone())
+                        .unwrap_or_default();
+                    sub_units_map.insert(item.get_key(), default_value);
+                }
+                if sub_units_map.is_empty() {
+                    None
+                } else {
+                    Some(sub_units_map)
+                }
+            } else {
+                None
+            };
+
             UnitInfo {
                 serial_number: unit_config.serial_number.as_ref().and_then(|c| c.default_value.clone()),
                 part_number: unit_config.part_number.as_ref().and_then(|c| c.default_value.clone()),
                 revision_number: unit_config.revision_number.as_ref().and_then(|c| c.default_value.clone()),
                 batch_number: unit_config.batch_number.as_ref().and_then(|c| c.default_value.clone()),
-                sub_units: None,
+                sub_units,
                 status: "active".to_string(),
             }
         } else {

@@ -161,6 +161,8 @@ pub struct Job {
     pub working_directory: Option<String>, // For shell phases: execution directory
     pub procedure_dir: Option<String>, // Procedure directory for resolving relative paths and default working dir
     pub phase_measurements: Vec<MeasurementSpec>, // YAML measurement definitions
+    /// Initial unit info (serial, part number, sub-units, etc.) for Python access
+    pub initial_unit_info: Option<crate::execution::types::UnitInfo>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -326,6 +328,7 @@ impl Job {
             working_directory: None,
             procedure_dir: None,
             phase_measurements,
+            initial_unit_info: None, // Set by orchestrator before execution
         }
     }
 

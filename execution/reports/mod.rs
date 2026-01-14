@@ -233,26 +233,75 @@ impl ReportManager {
         ) {
             let duration_ms = Local::now().timestamp_millis() - start_time;
 
+            // Collect unit info by merging all job results' unit info
+            // Start with initial_unit_info and merge in all phase unit infos
+            // Key insight: only update a field if the phase actually changed it
+            // (i.e., the new value differs from the initial value)
             let collected_unit_info = {
-                let phase_unit = job_results
-                    .values()
-                    .filter_map(|r| r.unit.as_ref())
-                    .max_by_key(|_| chrono::Utc::now())
-                    .cloned();
+                let mut merged = self.initial_unit_info.clone();
+                let initial = self.initial_unit_info.as_ref();
+                let initial_serial = initial.and_then(|u| u.serial_number.clone());
+                let initial_part = initial.and_then(|u| u.part_number.clone());
+                let initial_revision = initial.and_then(|u| u.revision_number.clone());
+                let initial_batch = initial.and_then(|u| u.batch_number.clone());
+                let initial_sub_units = initial.and_then(|u| u.sub_units.clone()).unwrap_or_default();
 
-                match (self.initial_unit_info.clone(), phase_unit) {
-                    (Some(initial), Some(phase)) => Some(crate::execution::types::UnitInfo {
-                        serial_number: phase.serial_number.or(initial.serial_number),
-                        part_number: phase.part_number.or(initial.part_number),
-                        revision_number: phase.revision_number.or(initial.revision_number),
-                        batch_number: phase.batch_number.or(initial.batch_number),
-                        sub_units: phase.sub_units.or(initial.sub_units),
-                        status: phase.status,
-                    }),
-                    (Some(initial), None) => Some(initial),
-                    (None, Some(phase)) => Some(phase),
-                    (None, None) => None,
+                // Collect all job results with unit info, sorted by start time to apply in order
+                let mut job_results_with_unit: Vec<_> = job_results
+                    .values()
+                    .filter(|r| r.unit.is_some())
+                    .collect();
+                job_results_with_unit.sort_by_key(|r| r.started_at);
+
+                for result in job_results_with_unit {
+                    if let Some(phase_unit) = &result.unit {
+                        merged = Some(match merged {
+                            Some(base) => {
+                                // Merge sub_units maps, but only if the phase actually changed the value
+                                let merged_sub_units = match (base.sub_units, phase_unit.sub_units.clone()) {
+                                    (Some(mut base_subs), Some(phase_subs)) => {
+                                        for (key, value) in phase_subs {
+                                            let initial_value = initial_sub_units.get(&key);
+                                            if initial_value != Some(&value) {
+                                                base_subs.insert(key, value);
+                                            }
+                                        }
+                                        Some(base_subs)
+                                    }
+                                    (Some(base_subs), None) => Some(base_subs),
+                                    (None, Some(phase_subs)) => {
+                                        let filtered: HashMap<String, String> = phase_subs
+                                            .into_iter()
+                                            .filter(|(k, v)| initial_sub_units.get(k) != Some(v))
+                                            .collect();
+                                        if filtered.is_empty() { None } else { Some(filtered) }
+                                    }
+                                    (None, None) => None,
+                                };
+
+                                // Helper: only update if phase value differs from initial
+                                let merge_field = |phase_val: &Option<String>, base_val: Option<String>, initial_val: &Option<String>| -> Option<String> {
+                                    match phase_val {
+                                        Some(v) if phase_val != initial_val => Some(v.clone()),
+                                        _ => base_val,
+                                    }
+                                };
+
+                                crate::execution::types::UnitInfo {
+                                    serial_number: merge_field(&phase_unit.serial_number, base.serial_number, &initial_serial),
+                                    part_number: merge_field(&phase_unit.part_number, base.part_number, &initial_part),
+                                    revision_number: merge_field(&phase_unit.revision_number, base.revision_number, &initial_revision),
+                                    batch_number: merge_field(&phase_unit.batch_number, base.batch_number, &initial_batch),
+                                    sub_units: merged_sub_units,
+                                    status: phase_unit.status.clone(),
+                                }
+                            }
+                            None => phase_unit.clone(),
+                        });
+                    }
                 }
+
+                merged
             };
 
             // Build phase reports from job results

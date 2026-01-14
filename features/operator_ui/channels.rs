@@ -16,3 +16,15 @@ use tokio::sync::{oneshot, Mutex};
 pub static UI_RESPONSE_CHANNELS: Lazy<
     Arc<Mutex<HashMap<String, oneshot::Sender<HashMap<String, String>>>>>,
 > = Lazy::new(|| Arc::new(Mutex::new(HashMap::new())));
+
+/// Close all pending UI response channels.
+/// This unblocks any phases waiting for UI input by dropping the senders,
+/// causing the receivers to get a RecvError.
+pub async fn close_all_ui_channels() {
+    let mut channels = UI_RESPONSE_CHANNELS.lock().await;
+    let count = channels.len();
+    if count > 0 {
+        log::debug!("Closing {} pending UI response channels", count);
+        channels.clear();
+    }
+}

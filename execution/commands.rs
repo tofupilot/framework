@@ -809,12 +809,27 @@ pub async fn submit_unit_input(
         let revision_number = unit_data.get("revision_number").cloned();
         let batch_number = unit_data.get("batch_number").cloned();
 
+        // Extract sub-units from unit_data (keys: sub_unit:Label -> serial_number)
+        let sub_units = {
+            let mut sub_units_map: HashMap<String, String> = HashMap::new();
+            for (key, value) in &unit_data {
+                if let Some(label) = key.strip_prefix("sub_unit:") {
+                    sub_units_map.insert(label.to_string(), value.clone());
+                }
+            }
+            if sub_units_map.is_empty() {
+                None
+            } else {
+                Some(sub_units_map)
+            }
+        };
+
         let unit_info = UnitInfo {
             serial_number,
             part_number,
             revision_number,
             batch_number,
-            sub_units: None,
+            sub_units,
             status: "active".to_string(),
         };
 

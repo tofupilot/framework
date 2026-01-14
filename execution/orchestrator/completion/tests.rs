@@ -31,6 +31,7 @@ mod outcome_resolver_tests {
             working_directory: None,
             procedure_dir: None,
             phase_measurements: vec![],
+            initial_unit_info: None,
         }
     }
 
@@ -610,6 +611,7 @@ mod integration_tests {
             working_directory: None,
             procedure_dir: None,
             phase_measurements: vec![],
+            initial_unit_info: None,
         }
     }
 
