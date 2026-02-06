@@ -9,7 +9,21 @@ pub use worker_state::WorkerStateTracker;
 pub struct JobInfo {
     pub phase_key: String,
     pub phase_name: String,
+    pub function: String,
     pub slot_id: Option<String>,
+    pub dependency_id: Uuid,
+}
+
+impl JobInfo {
+    pub fn from_job(job: &Job) -> Self {
+        Self {
+            phase_key: job.phase_key.clone(),
+            phase_name: job.phase_name.clone(),
+            function: job.function.clone(),
+            slot_id: job.slot_id.clone(),
+            dependency_id: job.dependency_id,
+        }
+    }
 }
 
 /// Information about a pending delayed retry task
@@ -20,6 +34,7 @@ pub struct PendingDelayedRetry {
     pub phase_name: String,
     pub slot_id: Option<String>,
     pub job_id: Uuid,
+    pub dependency_id: Uuid,
 }
 
 /// Centralized state for the orchestrator to reduce lock complexity
@@ -113,9 +128,22 @@ impl OrchestratorState {
         self.worker_state.assign_job(worker_id, job_id)
     }
 
-    /// Complete a job
+    /// Complete a job and resolve its dependency_id to unblock dependents
     pub fn complete_job(&mut self, job_id: Uuid, result: JobResult) {
         self.completed_jobs.insert(job_id);
+        // Also insert dependency_id so dependents waiting on the original UUID get unblocked
+        if let Some(info) = self.job_info.get(&job_id) {
+            if info.dependency_id != job_id {
+                self.completed_jobs.insert(info.dependency_id);
+            }
+        }
+        self.job_results.insert(job_id, result);
+        self.worker_state.release_by_job(&job_id);
+    }
+
+    /// Record a retry attempt without satisfying dependencies.
+    /// Stores result and releases the worker, but does NOT add to completed_jobs.
+    pub fn record_retry_attempt(&mut self, job_id: Uuid, result: JobResult) {
         self.job_results.insert(job_id, result);
         self.worker_state.release_by_job(&job_id);
     }
@@ -129,19 +157,10 @@ impl OrchestratorState {
     pub fn complete_job_with_info(
         &mut self,
         job_id: Uuid,
-        phase_key: String,
-        phase_name: String,
-        slot_id: Option<String>,
+        job: &Job,
         result: JobResult,
     ) {
-        self.job_info.insert(
-            job_id,
-            JobInfo {
-                phase_key,
-                phase_name,
-                slot_id,
-            },
-        );
+        self.job_info.insert(job_id, JobInfo::from_job(job));
         self.complete_original_job(job_id, result);
     }
 
@@ -191,14 +210,7 @@ impl OrchestratorState {
                 retry_count: job.retry_count,
             };
             // Populate job_info so cancelled jobs appear in the report
-            self.job_info.insert(
-                job.id,
-                JobInfo {
-                    phase_key: job.phase_key.clone(),
-                    phase_name: job.phase_name.clone(),
-                    slot_id: job.slot_id.clone(),
-                },
-            );
+            self.job_info.insert(job.id, JobInfo::from_job(job));
             // Cancelled jobs from queue are original jobs (not yet started)
             if job.retry_count == 0 {
                 self.complete_original_job(job.id, result);
@@ -253,14 +265,7 @@ impl OrchestratorState {
                 retry_count: job.retry_count,
             };
             // Populate job_info so cancelled jobs appear in the report
-            self.job_info.insert(
-                job.id,
-                JobInfo {
-                    phase_key: job.phase_key.clone(),
-                    phase_name: job.phase_name.clone(),
-                    slot_id: job.slot_id.clone(),
-                },
-            );
+            self.job_info.insert(job.id, JobInfo::from_job(job));
             // Cancelled jobs from queue are original jobs (not yet started)
             if job.retry_count == 0 {
                 self.complete_original_job(job.id, result);

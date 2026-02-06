@@ -30,6 +30,36 @@ impl Orchestrator {
         // Set initial unit info on job for Python access
         job.initial_unit_info = self.initial_unit_info.clone();
 
+        // Build phase_results from completed phases (same slot or shared)
+        {
+            let state = self.state.read().await;
+            let mut phase_results: std::collections::HashMap<String, String> =
+                std::collections::HashMap::new();
+            for (job_id, info) in &state.job_info {
+                // Include results from same slot or shared phases
+                if info.slot_id == job.slot_id || info.slot_id.is_none() {
+                    if let Some(result) = state.job_results.get(job_id) {
+                        let mut data: serde_json::Map<String, serde_json::Value> = result
+                            .measurements
+                            .iter()
+                            .map(|m| (m.name.clone(), m.value.to_raw_json()))
+                            .collect();
+                        data.insert(
+                            "outcome".to_string(),
+                            serde_json::json!(result.phase_outcome),
+                        );
+                        let duration_ms =
+                            (result.completed_at - result.started_at).num_milliseconds();
+                        data.insert("duration_ms".to_string(), serde_json::json!(duration_ms));
+                        if let Ok(json) = serde_json::to_string(&data) {
+                            phase_results.insert(info.phase_key.clone(), json);
+                        }
+                    }
+                }
+            }
+            job.phase_results = phase_results;
+        }
+
         // Track phase in display systems
         {
             let state = self.state.read().await;
@@ -85,14 +115,7 @@ impl Orchestrator {
         // Store job info when starting (needed for shutdown event emission)
         {
             let mut state = self.state.write().await;
-            state.job_info.insert(
-                job.id,
-                crate::execution::state::JobInfo {
-                    phase_key: job.phase_key.clone(),
-                    phase_name: job.phase_name.clone(),
-                    slot_id: job.slot_id.clone(),
-                },
-            );
+            state.job_info.insert(job.id, crate::execution::state::JobInfo::from_job(&job));
         }
 
         // Emit job started event

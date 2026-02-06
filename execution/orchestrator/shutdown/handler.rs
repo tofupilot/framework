@@ -32,7 +32,6 @@ impl Orchestrator {
     fn collect_and_complete_jobs(
         state: &mut OrchestratorState,
         running_error_msg: String,
-        queued_error_msg: Option<String>,
         partition_teardown: bool,
     ) -> (
         Vec<(usize, uuid::Uuid, String, String, String)>,
@@ -83,6 +82,7 @@ impl Orchestrator {
                         .clone()
                         .unwrap_or_else(|| "<shared>".to_string()),
                 ));
+                state.job_info.insert(job.id, crate::execution::state::JobInfo::from_job(&job));
                 state.complete_job(job.id, JobResult::new_skip());
             }
         }
@@ -96,12 +96,9 @@ impl Orchestrator {
                     .clone()
                     .unwrap_or_else(|| "<shared>".to_string()),
             ));
-            let result = if queued_error_msg.is_some() {
-                JobResult::new_skip()
-            } else {
-                JobResult::new_skip()
-            };
-            state.complete_job(job.id, result);
+            // Populate job_info so complete_job can resolve dependency_id
+            state.job_info.insert(job.id, crate::execution::state::JobInfo::from_job(&job));
+            state.complete_job(job.id, JobResult::new_skip());
         }
 
         for job in &pending_slot_jobs {
@@ -113,6 +110,8 @@ impl Orchestrator {
                     .clone()
                     .unwrap_or_else(|| "<shared>".to_string()),
             ));
+            // Populate job_info so complete_job can resolve dependency_id
+            state.job_info.insert(job.id, crate::execution::state::JobInfo::from_job(&job));
             state.complete_job(job.id, JobResult::new_skip());
         }
 
@@ -350,6 +349,7 @@ impl Orchestrator {
                 // Timeout - force complete remaining jobs
                 let mut state = self.state.write().await;
                 while let Some(job) = state.job_queue.pop_front() {
+                    state.job_info.insert(job.id, crate::execution::state::JobInfo::from_job(&job));
                     state.complete_job(
                         job.id,
                         JobResult::new_error("Teardown timeout during shutdown".to_string()),
@@ -478,10 +478,13 @@ impl Orchestrator {
             let mut state = self.state.write().await;
             state.shutdown_requested = true;
             let handles = std::mem::take(&mut state.pending_delayed_retry_handles);
+            // Resolve dependencies for pending retries that won't run
+            for pending in &handles {
+                state.completed_jobs.insert(pending.dependency_id);
+            }
             let result = Self::collect_and_complete_jobs(
                 &mut state,
                 "Execution stopped by user".to_string(),
-                None,
                 true,
             );
             (result.0, result.1, result.2, handles)
@@ -569,10 +572,13 @@ impl Orchestrator {
             let mut state = self.state.write().await;
             state.shutdown_requested = true;
             let handles = std::mem::take(&mut state.pending_delayed_retry_handles);
+            // Resolve dependencies for pending retries that won't run
+            for pending in &handles {
+                state.completed_jobs.insert(pending.dependency_id);
+            }
             let result = Self::collect_and_complete_jobs(
                 &mut state,
                 "Force killed by user".to_string(),
-                None,
                 false,
             );
             (result.0, result.1, result.2, handles)
@@ -676,11 +682,42 @@ impl Orchestrator {
         _execution_id: Option<String>,
         app_handle: Option<AppHandle>,
     ) -> Result<(), String> {
-        // Set shutdown flags FIRST to prevent new jobs from being scheduled
-        {
+        // Set shutdown flags and take pending retry handles atomically
+        let pending_retry_handles = {
             let mut state_guard = state.write().await;
             state_guard.shutdown_requested = true;
             state_guard.force_kill_requested = true;
+            let handles = std::mem::take(&mut state_guard.pending_delayed_retry_handles);
+            // Resolve dependencies for pending retries that won't run
+            for pending in &handles {
+                state_guard.completed_jobs.insert(pending.dependency_id);
+            }
+            handles
+        };
+
+        // Abort all pending delayed retry tasks
+        for pending in &pending_retry_handles {
+            pending.handle.abort();
+
+            if let Some(ref app) = app_handle {
+                use super::super::orchestrator::{JobProgress, JobProgressEvent};
+
+                let progress = JobProgress {
+                    job_id: pending.job_id.to_string(),
+                    slot_id: pending.slot_id.clone(),
+                    phase_key: pending.phase_key.clone(),
+                    phase_name: pending.phase_name.clone(),
+                    stage_scope: StageScope::Main,
+                    status: JobStatus::Completed,
+                    worker_id: None,
+                    started_at: None,
+                    timeout_ms: None,
+                    outcome: Some(Outcome::Error),
+                    retry_count: 0,
+                    error: Some("Force killed by user".to_string()),
+                };
+                let _ = JobProgressEvent(progress).emit(app);
+            }
         }
 
         log::info!("Force killing all workers immediately");
@@ -710,7 +747,6 @@ impl Orchestrator {
             Self::collect_and_complete_jobs(
                 &mut state_guard,
                 "Force killed by user".to_string(),
-                None,
                 false,
             )
         };

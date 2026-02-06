@@ -271,13 +271,7 @@ impl Orchestrator {
                 false
             }
             PhaseNextAction::Continue | PhaseNextAction::Skip => {
-                state.complete_job_with_info(
-                    event.job_id,
-                    event.original_job.phase_key.clone(),
-                    event.original_job.phase_name.clone(),
-                    event.original_job.slot_id.clone(),
-                    job_result,
-                );
+                state.complete_job_with_info(event.job_id, &event.original_job, job_result);
                 true
             }
         }
@@ -292,13 +286,7 @@ impl Orchestrator {
         let should_retry = event.original_job.can_retry();
 
         if !should_retry {
-            state.complete_job_with_info(
-                event.job_id,
-                event.original_job.phase_key.clone(),
-                event.original_job.phase_name.clone(),
-                event.original_job.slot_id.clone(),
-                job_result,
-            );
+            state.complete_job_with_info(event.job_id, &event.original_job, job_result);
             // emit_stats is called by handle_job_completion after releasing state lock
             return true;
         }
@@ -328,15 +316,9 @@ impl Orchestrator {
             delay_msg
         );
 
-        state.job_info.insert(
-            event.job_id,
-            crate::execution::state::JobInfo {
-                phase_key: event.original_job.phase_key.clone(),
-                phase_name: event.original_job.phase_name.clone(),
-                slot_id: event.original_job.slot_id.clone(),
-            },
-        );
-        state.complete_job(event.job_id, job_result);
+        state.job_info.insert(event.job_id, crate::execution::state::JobInfo::from_job(&event.original_job));
+        // Record result without satisfying dependencies — dependents stay blocked until retry resolves
+        state.record_retry_attempt(event.job_id, job_result);
 
         if let Some(delay_ms) = retry_job.retry_delay_ms {
             let state_arc = self.state.clone();
@@ -344,6 +326,7 @@ impl Orchestrator {
             let phase_name = retry_job.phase_name.clone();
             let slot_id = retry_job.slot_id.clone();
             let retry_job_id = retry_job.id;
+            let dependency_id = retry_job.dependency_id;
 
             let handle = tokio::spawn(async move {
                 tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
@@ -360,6 +343,7 @@ impl Orchestrator {
                     phase_name,
                     slot_id,
                     job_id: retry_job_id,
+                    dependency_id,
                 },
             );
         } else {
@@ -408,13 +392,7 @@ impl Orchestrator {
         )
         .await;
 
-        state.complete_job_with_info(
-            event.job_id,
-            event.original_job.phase_key.clone(),
-            event.original_job.phase_name.clone(),
-            event.original_job.slot_id.clone(),
-            job_result,
-        );
+        state.complete_job_with_info(event.job_id, &event.original_job, job_result);
 
         // Note: shutdown_requested is set by cancel_all_jobs only if no teardown phases remain
     }

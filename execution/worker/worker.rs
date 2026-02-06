@@ -296,6 +296,7 @@ impl Worker {
             retry_count: job.retry_count as u32,
             retry_limit: job.retry_limit as u32,
             unit_info: grpc_unit_info,
+            phase_results: job.phase_results.clone(),
         };
 
         let mut client = {

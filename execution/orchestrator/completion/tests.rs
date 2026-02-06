@@ -8,8 +8,9 @@ mod outcome_resolver_tests {
     use uuid::Uuid;
 
     fn create_test_job(retry_count: usize, retry_limit: usize) -> Job {
+        let id = Uuid::new_v4();
         Job {
-            id: Uuid::new_v4(),
+            id,
             slot_id: None,
             phase_key: "test_phase".to_string(),
             phase_name: "Test Phase".to_string(),
@@ -32,6 +33,8 @@ mod outcome_resolver_tests {
             procedure_dir: None,
             phase_measurements: vec![],
             initial_unit_info: None,
+            phase_results: std::collections::HashMap::new(),
+            dependency_id: id,
         }
     }
 
@@ -588,8 +591,9 @@ mod integration_tests {
     use uuid::Uuid;
 
     fn create_test_job(retry_count: usize, retry_limit: usize) -> Job {
+        let id = Uuid::new_v4();
         Job {
-            id: Uuid::new_v4(),
+            id,
             slot_id: None,
             phase_key: "test_phase".to_string(),
             phase_name: "Test Phase".to_string(),
@@ -612,6 +616,8 @@ mod integration_tests {
             procedure_dir: None,
             phase_measurements: vec![],
             initial_unit_info: None,
+            phase_results: std::collections::HashMap::new(),
+            dependency_id: id,
         }
     }
 

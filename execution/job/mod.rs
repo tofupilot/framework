@@ -163,6 +163,14 @@ pub struct Job {
     pub phase_measurements: Vec<MeasurementSpec>, // YAML measurement definitions
     /// Initial unit info (serial, part number, sub-units, etc.) for Python access
     pub initial_unit_info: Option<crate::execution::types::UnitInfo>,
+    /// Completed phase measurements keyed by phase key, values are JSON strings
+    #[serde(default)]
+    pub phase_results: HashMap<String, String>,
+    /// The job UUID that dependent phases are waiting on.
+    /// For original jobs: same as `id`. For retry jobs: the original job's `dependency_id`.
+    /// When this job completes, `dependency_id` is inserted into `completed_jobs` to unblock dependents.
+    #[serde(default = "Uuid::new_v4")]
+    pub dependency_id: Uuid,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -329,6 +337,8 @@ impl Job {
             procedure_dir: None,
             phase_measurements,
             initial_unit_info: None, // Set by orchestrator before execution
+            phase_results: HashMap::new(), // Populated by orchestrator before execution
+            dependency_id: id, // Original jobs: dependents wait on this UUID
         }
     }
 
@@ -435,7 +445,8 @@ impl Job {
         retry_job.retry_count += 1;
         retry_job.status = JobStatus::Pending;
         retry_job.result = None;
-        retry_job // timeout_ms and retry_delay_ms are preserved via clone
+        // dependency_id is preserved via clone — retry resolves the same dependency as the original
+        retry_job
     }
 
     pub fn is_failure(&self) -> bool {
