@@ -837,10 +837,8 @@ impl Worker {
                         (crate::execution::job::PhaseResult::Continue, None)
                     }
                     Err(_) => {
-                        (
-                            crate::execution::job::PhaseResult::Continue,
-                            Some("Failed to receive UI response".to_string()),
-                        )
+                        // Channel closed = phase was cancelled (e.g. on_first_failure: stop)
+                        (crate::execution::job::PhaseResult::Stop, None)
                     }
                 }
             } else {

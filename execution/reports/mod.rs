@@ -246,14 +246,37 @@ impl ReportManager {
                 let initial_batch = initial.and_then(|u| u.batch_number.clone());
                 let initial_sub_units = initial.and_then(|u| u.sub_units.clone()).unwrap_or_default();
 
-                // Collect all job results with unit info, sorted by start time to apply in order
-                let mut job_results_with_unit: Vec<_> = job_results
-                    .values()
-                    .filter(|r| r.unit.is_some())
-                    .collect();
-                job_results_with_unit.sort_by_key(|r| r.started_at);
+                // Build phase declaration order map (setup → main → teardown)
+                let phase_declaration_order: HashMap<String, usize> = self.procedure_def
+                    .as_ref()
+                    .map(|def| {
+                        let mut order = HashMap::new();
+                        let mut idx = 0;
+                        for p in &def.setup { order.insert(p.key.clone(), idx); idx += 1; }
+                        for p in &def.main { order.insert(p.key.clone(), idx); idx += 1; }
+                        for p in &def.teardown { order.insert(p.key.clone(), idx); idx += 1; }
+                        order
+                    })
+                    .unwrap_or_default();
 
-                for result in job_results_with_unit {
+                // Collect all job results with unit info, sorted by declaration order
+                let mut job_results_with_unit: Vec<_> = job_results
+                    .iter()
+                    .filter(|(_, r)| r.unit.is_some())
+                    .collect();
+                job_results_with_unit.sort_by(|(id_a, a), (id_b, b)| {
+                    let pos_a = job_info.get(id_a)
+                        .and_then(|i| phase_declaration_order.get(&i.phase_key))
+                        .copied()
+                        .unwrap_or(usize::MAX);
+                    let pos_b = job_info.get(id_b)
+                        .and_then(|i| phase_declaration_order.get(&i.phase_key))
+                        .copied()
+                        .unwrap_or(usize::MAX);
+                    pos_a.cmp(&pos_b).then(a.started_at.cmp(&b.started_at))
+                });
+
+                for (_, result) in job_results_with_unit {
                     if let Some(phase_unit) = &result.unit {
                         merged = Some(match merged {
                             Some(base) => {

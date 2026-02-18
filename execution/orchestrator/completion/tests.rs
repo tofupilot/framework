@@ -218,6 +218,20 @@ mod outcome_resolver_tests {
         assert_eq!(outcome, Outcome::Error);
     }
 
+    /// When a UI phase is cancelled (channel closed by on_first_failure: stop),
+    /// it returns PhaseResult::Stop with no error. This must resolve to Outcome::Stop,
+    /// not Outcome::Error.
+    #[test]
+    fn test_cancelled_ui_phase_produces_stop_not_error() {
+        let job = create_test_job(0, 3);
+        let job_result = create_basic_job_result(PhaseResult::Stop, vec![]);
+
+        let (outcome, _) = resolve_outcome(&job_result, &job, true);
+
+        assert_eq!(outcome, Outcome::Stop);
+        assert!(job_result.error.is_none());
+    }
+
     #[test]
     fn test_priority_shutdown_over_measurement() {
         let job = create_test_job(0, 3);
@@ -788,5 +802,38 @@ mod integration_tests {
 
         assert_eq!(outcome, Outcome::Stop);
         assert_eq!(next_action, PhaseNextAction::Stop);
+    }
+
+    /// Regression: when voltage_phase fails with on_first_failure: stop,
+    /// a parallel UI phase (instructions_phase) waiting for user input gets its
+    /// channel closed. It must produce Outcome::Stop (not Outcome::Error).
+    #[test]
+    fn test_cancelled_ui_phase_during_on_first_failure_stop() {
+        let job = create_test_job(0, 3);
+        // Cancelled UI phase returns PhaseResult::Stop with no error
+        let job_result = create_basic_job_result(PhaseResult::Stop, vec![]);
+
+        let (outcome, _) = resolve_outcome(&job_result, &job, true);
+        let next_action = determine_next_action(&job_result, &outcome, None, true);
+
+        assert_eq!(outcome, Outcome::Stop);
+        assert_eq!(next_action, PhaseNextAction::Stop);
+        assert!(job_result.error.is_none(), "Cancelled UI phase must not produce an error");
+    }
+
+    /// Verify the old buggy behavior doesn't regress: if a cancelled UI phase
+    /// were to set an error string, it would incorrectly resolve to Outcome::Error
+    /// instead of Outcome::Stop.
+    #[test]
+    fn test_ui_phase_with_error_string_would_produce_error_not_stop() {
+        let job = create_test_job(0, 3);
+        let mut job_result = create_basic_job_result(PhaseResult::Continue, vec![]);
+        job_result.error = Some("Failed to receive UI response".to_string());
+
+        let (outcome, _) = resolve_outcome(&job_result, &job, true);
+
+        // This demonstrates why the fix must be in the worker (no error),
+        // not in the outcome resolver (reordering checks).
+        assert_eq!(outcome, Outcome::Error);
     }
 }

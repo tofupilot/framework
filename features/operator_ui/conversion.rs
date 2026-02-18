@@ -30,6 +30,7 @@ pub fn convert_ui_config(proc_ui: &ProcedureUIConfig) -> UiConfig {
             .as_ref()
             .map(|comps| comps.iter().map(convert_ui_component).collect())
             .unwrap_or_default(),
+        requires_input: proc_ui.requires_input,
     }
 }
 
@@ -45,6 +46,8 @@ fn convert_ui_component(proc_comp: &ProcedureUIComponent) -> UiComponent {
         crate::procedure::schema::UIComponentType::Multiselect => ComponentType::Multiselect,
         crate::procedure::schema::UIComponentType::Checklist => ComponentType::Checklist,
         crate::procedure::schema::UIComponentType::Slider => ComponentType::Slider,
+        crate::procedure::schema::UIComponentType::ImageChoice => ComponentType::ImageChoice,
+        crate::procedure::schema::UIComponentType::ImageChecklist => ComponentType::ImageChecklist,
         crate::procedure::schema::UIComponentType::Text => ComponentType::Text,
         crate::procedure::schema::UIComponentType::Image => ComponentType::Image,
         crate::procedure::schema::UIComponentType::Progress => ComponentType::Progress,
@@ -64,9 +67,11 @@ fn convert_ui_component(proc_comp: &ProcedureUIComponent) -> UiComponent {
                 .map(|opt| UiOption {
                     label: opt.label.clone(),
                     value: opt.value.clone(),
+                    image: opt.image.clone(),
                 })
                 .collect()
         }),
+        columns: proc_comp.columns,
         default_value: proc_comp
             .default_value
             .as_ref()

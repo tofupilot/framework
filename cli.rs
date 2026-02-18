@@ -37,12 +37,12 @@ pub fn run(procedure_path: PathBuf) {
         }
     };
 
-    runtime.block_on(async {
+    let exit_code = runtime.block_on(async {
         let procedure_def = match crate::procedure::load_procedure_definition(&procedure_path) {
             Ok(def) => def,
             Err(e) => {
                 log::error!("Failed to load procedure: {}", e);
-                return;
+                return 1;
             }
         };
 
@@ -65,7 +65,7 @@ pub fn run(procedure_path: PathBuf) {
         if let Err(e) = orchestrator.initialize().await {
             log::error!("Failed to initialize workers: {}", e);
             let _ = orchestrator.shutdown(None).await;
-            std::process::exit(1);
+            return 1;
         }
 
         let slots: Vec<String> = if let Some(execution) = &procedure_def.execution {
@@ -82,7 +82,7 @@ pub fn run(procedure_path: PathBuf) {
             if slot.trim().is_empty() {
                 log::error!("Slot names cannot be empty");
                 let _ = orchestrator.shutdown(None).await;
-                std::process::exit(1);
+                return 1;
             }
         }
 
@@ -141,7 +141,7 @@ pub fn run(procedure_path: PathBuf) {
         {
             log::error!("Failed to submit procedure: {}", e);
             let _ = orchestrator.shutdown(None).await;
-            std::process::exit(1);
+            return 1;
         }
 
         let exit_code = match orchestrator.execute_all(None).await {
@@ -160,6 +160,11 @@ pub fn run(procedure_path: PathBuf) {
         };
 
         let _ = orchestrator.shutdown(None).await;
-        std::process::exit(exit_code);
+        exit_code
     });
+
+    // Drop the runtime before exiting so spawned tasks are cancelled
+    // and GrpcProcess Drop impls kill any remaining child processes.
+    drop(runtime);
+    std::process::exit(exit_code);
 }

@@ -16,6 +16,37 @@ pub mod validation;
 
 pub use execution::{OrchestratorState, StandalonePlugServiceState, UIResponseState};
 
+/// Kill all child process groups. Each child was spawned as its own process group leader
+/// via `command_group`, so killing the group (-pid) kills the child and all its descendants.
+/// This is a synchronous last-resort safety net for when the async cleanup didn't complete.
+#[cfg(unix)]
+fn kill_child_process_groups() {
+    use nix::sys::signal::{killpg, Signal};
+    use nix::unistd::Pid;
+
+    let our_pid = std::process::id().to_string();
+    let Ok(output) = std::process::Command::new("pgrep")
+        .args(["-P", &our_pid])
+        .output()
+    else {
+        return;
+    };
+    let Ok(pids) = String::from_utf8(output.stdout) else {
+        return;
+    };
+    for pid_str in pids.lines() {
+        if let Ok(pid) = pid_str.trim().parse::<i32>() {
+            // killpg sends signal to the entire process group
+            let _ = killpg(Pid::from_raw(pid), Signal::SIGKILL);
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn kill_child_process_groups() {
+    // On Windows, process cleanup is handled via Job Objects (see windows dependency)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri_specta::Builder::<tauri::Wry>::new()
@@ -157,27 +188,58 @@ pub fn run() {
                 tauri::async_runtime::spawn(async move {
                     let orchestrator_state = app_handle.state::<OrchestratorState>();
 
-                    let worker_refs = orchestrator_state.worker_refs.lock().await;
-                    for (execution_id, workers_arc) in worker_refs.iter() {
-                        log::info!("Killing workers for execution: {}", execution_id);
-                        let mut workers = workers_arc.write().await;
-                        for worker in workers.iter_mut() {
-                            if let Err(e) = worker.force_shutdown().await {
-                                log::warn!("Failed to kill worker: {}", e);
+                    // Graceful cleanup with timeout — if it deadlocks, we still exit
+                    let cleanup = async {
+                        // Cancel all pending initializations
+                        let pending_inits = orchestrator_state.pending_initializations.lock().await;
+                        for (exec_id, pending) in pending_inits.iter() {
+                            log::info!("Cancelling pending initialization: {}", exec_id);
+                            pending.cancelled.store(true, std::sync::atomic::Ordering::Relaxed);
+                            let mut handle_guard = pending.handle.lock().await;
+                            if let Some(handle) = handle_guard.take() {
+                                handle.abort();
                             }
                         }
-                    }
-                    drop(worker_refs);
+                        drop(pending_inits);
 
-                    let resource_manager_refs = orchestrator_state.resource_manager_refs.lock().await;
-                    for (execution_id, rm_arc) in resource_manager_refs.iter() {
-                        log::info!("Stopping plug services for execution: {}", execution_id);
-                        let rm = rm_arc.read().await;
-                        if let Err(e) = rm.force_destroy_all_plugs(Some(&app_handle)).await {
-                            log::warn!("Failed to stop plug services: {}", e);
+                        // Set shutdown flags on all execution states to prevent worker replacement
+                        let state_refs = orchestrator_state.state_refs.lock().await;
+                        for (execution_id, state_arc) in state_refs.iter() {
+                            log::info!("Setting shutdown flags for execution: {}", execution_id);
+                            let mut state = state_arc.write().await;
+                            state.shutdown_requested = true;
+                            state.force_kill_requested = true;
                         }
+                        drop(state_refs);
+
+                        let worker_refs = orchestrator_state.worker_refs.lock().await;
+                        for (execution_id, workers_arc) in worker_refs.iter() {
+                            log::info!("Killing workers for execution: {}", execution_id);
+                            let mut workers = workers_arc.write().await;
+                            for worker in workers.iter_mut() {
+                                if let Err(e) = worker.force_shutdown().await {
+                                    log::warn!("Failed to kill worker: {}", e);
+                                }
+                            }
+                            // Clear the Vec so job tasks see is_empty() and skip replacement
+                            workers.clear();
+                        }
+                        drop(worker_refs);
+
+                        let resource_manager_refs = orchestrator_state.resource_manager_refs.lock().await;
+                        for (execution_id, rm_arc) in resource_manager_refs.iter() {
+                            log::info!("Stopping plug services for execution: {}", execution_id);
+                            let rm = rm_arc.read().await;
+                            if let Err(e) = rm.force_destroy_all_plugs(Some(&app_handle)).await {
+                                log::warn!("Failed to stop plug services: {}", e);
+                            }
+                        }
+                        drop(resource_manager_refs);
+                    };
+
+                    if tokio::time::timeout(std::time::Duration::from_secs(5), cleanup).await.is_err() {
+                        log::error!("Process cleanup timed out after 5s, forcing exit");
                     }
-                    drop(resource_manager_refs);
 
                     log::info!("All workers killed, exiting application");
                     app_handle.exit(0);
@@ -192,6 +254,14 @@ pub fn run() {
             builder.mount_events(app);
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_app_handle, event| {
+            // Safety net: kill all child process groups on exit regardless of how we got here.
+            // Covers: Cmd+Q, force quit, cleanup timeout, crash.
+            // RunEvent::Exit fires after the event loop stops, right before process termination.
+            if let tauri::RunEvent::Exit = event {
+                kill_child_process_groups();
+            }
+        });
 }

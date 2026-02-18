@@ -244,6 +244,12 @@ impl Orchestrator {
                     Ok(allocation) => allocation,
                     Err(e) => {
                         log::warn!("Failed to allocate resources: {}", e);
+                        let _ = completion_tx.send(JobCompletionEvent {
+                            job_id,
+                            result: Err(format!("Failed to allocate resources: {}", e)),
+                            original_job: original_job.clone(),
+                            worker_id,
+                        });
                         return;
                     }
                 };

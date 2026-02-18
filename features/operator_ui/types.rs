@@ -8,6 +8,11 @@ use tauri_specta::Event;
 pub struct UiConfig {
     #[serde(default)]
     pub components: Vec<UiComponent>,
+
+    /// Override whether this UI requires user input (shows Continue button).
+    /// If not set, auto-detected from component types.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requires_input: Option<bool>,
 }
 
 impl UiConfig {
@@ -16,11 +21,13 @@ impl UiConfig {
         self.components.iter().any(|comp| comp.is_input_component())
     }
 
-    /// Check if this UI requires user input (has input components)
-    /// If true, orchestrator will wait for user submission
-    /// If false, UI is display-only and completes automatically
+    /// Check if this UI requires user input.
+    /// If `requires_input` is set in the procedure YAML, use that override.
+    /// Otherwise, auto-detect from component types.
+    /// If true, orchestrator will wait for user submission.
+    /// If false, UI is display-only and completes automatically.
     pub fn requires_user_input(&self) -> bool {
-        self.has_input_components()
+        self.requires_input.unwrap_or_else(|| self.has_input_components())
     }
 
     /// Check if this UI should auto-continue (inverse of requires_user_input)
@@ -44,6 +51,8 @@ impl UiComponent {
                 | ComponentType::Checklist
                 | ComponentType::Switch
                 | ComponentType::Slider
+                | ComponentType::ImageChoice
+                | ComponentType::ImageChecklist
         )
     }
 
@@ -87,11 +96,13 @@ pub struct UiComponent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub options: Option<Vec<UiOption>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub columns: Option<u32>, // Grid columns for image_choice / image_checklist
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub width: Option<String>, // Width with unit (e.g., "50%", "100%")
     #[serde(skip_serializing_if = "Option::is_none")]
     pub height: Option<String>, // Height with unit (e.g., "400px", "600px")
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub aspect: Option<String>, // Aspect ratio: "square", "auto", "16/9", etc.
+    pub aspect: Option<String>, // Aspect ratio: "16/9", "4/3", "3/4", "2/3", "9/16", "square", "auto"
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fit: Option<String>, // Image fit mode: "contain", "cover", "fill"
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -157,6 +168,8 @@ pub enum ComponentType {
     Multiselect,
     Checklist,
     Slider,
+    ImageChoice,
+    ImageChecklist,
 
     // Display components (output only)
     Text,
@@ -180,6 +193,8 @@ impl ComponentType {
             "multiselect",
             "checklist",
             "slider",
+            "image_choice",
+            "image_checklist",
             // Display types
             "text",
             "image",
@@ -201,6 +216,8 @@ impl ComponentType {
             "checklist" => Some(ComponentType::Checklist),
             "switch" => Some(ComponentType::Switch),
             "slider" => Some(ComponentType::Slider),
+            "image_choice" => Some(ComponentType::ImageChoice),
+            "image_checklist" => Some(ComponentType::ImageChecklist),
 
             // Display types
             "text" => Some(ComponentType::Text),
@@ -224,6 +241,8 @@ impl ComponentType {
             ComponentType::Checklist => "checklist",
             ComponentType::Switch => "switch",
             ComponentType::Slider => "slider",
+            ComponentType::ImageChoice => "image_choice",
+            ComponentType::ImageChecklist => "image_checklist",
             ComponentType::Text => "text",
             ComponentType::Image => "image",
             ComponentType::Progress => "progress",
@@ -244,6 +263,8 @@ impl ComponentType {
                 | ComponentType::Checklist
                 | ComponentType::Switch
                 | ComponentType::Slider
+                | ComponentType::ImageChoice
+                | ComponentType::ImageChecklist
         )
     }
 }
@@ -253,6 +274,8 @@ impl ComponentType {
 pub struct UiOption {
     pub label: String,
     pub value: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
 }
 
 /// UI request data sent to frontend

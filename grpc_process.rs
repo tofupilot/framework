@@ -6,6 +6,29 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::ChildStderr;
 use tonic::transport::Channel;
 
+#[cfg(unix)]
+use nix::sys::signal::{self, Signal};
+#[cfg(unix)]
+use nix::unistd::Pid;
+
+/// Kill a process group by its PID. Cross-platform.
+fn kill_process_group(id: u32) {
+    #[cfg(unix)]
+    {
+        if let Ok(pid) = i32::try_from(id) {
+            let _ = signal::kill(Pid::from_raw(-pid), Signal::SIGKILL);
+        } else {
+            log::error!("PID {} exceeds i32::MAX, cannot kill process group", id);
+        }
+    }
+    #[cfg(windows)]
+    {
+        let _ = std::process::Command::new("taskkill")
+            .args(["/PID", &id.to_string(), "/T", "/F"])
+            .output();
+    }
+}
+
 #[derive(Debug)]
 pub struct GrpcProcess<C> {
     pub port: u16,
@@ -48,11 +71,19 @@ impl<C> GrpcProcess<C> {
             .spawn()
             .map_err(|e| format!("Failed to spawn gRPC process: {}", e))?;
 
-        let stdout = process
-            .inner()
-            .stdout
-            .take()
-            .ok_or("Failed to get stdout from gRPC process")?;
+        let kill_on_err = |mut p: AsyncGroupChild| {
+            if let Some(id) = p.inner().id() {
+                kill_process_group(id);
+            }
+        };
+
+        let stdout = match process.inner().stdout.take() {
+            Some(s) => s,
+            None => {
+                kill_on_err(process);
+                return Err("Failed to get stdout from gRPC process".to_string());
+            }
+        };
 
         let mut stderr = process.inner().stderr.take();
 
@@ -65,24 +96,33 @@ impl<C> GrpcProcess<C> {
 
         let mut stdout_reader = BufReader::new(stdout);
         let mut port_line = String::new();
-        stdout_reader
-            .read_line(&mut port_line)
-            .await
-            .map_err(|e| format!("Failed to read port from gRPC process: {}", e))?;
+        if let Err(e) = stdout_reader.read_line(&mut port_line).await {
+            kill_on_err(process);
+            return Err(format!("Failed to read port from gRPC process: {}", e));
+        }
 
-        let port = port_line
+        let port = match port_line
             .trim()
             .strip_prefix("GRPC_PORT:")
-            .ok_or_else(|| {
-                format!(
+            .and_then(|s| s.parse::<u16>().ok())
+        {
+            Some(p) => p,
+            None => {
+                kill_on_err(process);
+                return Err(format!(
                     "Invalid port line from gRPC process: {}\nPython worker may have crashed during startup.\nCheck logs above for Python errors.",
                     port_line.trim()
-                )
-            })?
-            .parse::<u16>()
-            .map_err(|e| format!("Failed to parse port: {}", e))?;
+                ));
+            }
+        };
 
-        let client = client_factory(port).await?;
+        let client = match client_factory(port).await {
+            Ok(c) => c,
+            Err(e) => {
+                kill_on_err(process);
+                return Err(e);
+            }
+        };
 
         Ok(Self {
             port,
@@ -133,7 +173,11 @@ impl<C> GrpcProcess<C> {
             log::error!("Failed to kill process group: {}", e);
         }
 
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        // Wait for process to be fully reaped instead of sleeping
+        let _ = tokio::time::timeout(
+            Duration::from_millis(500),
+            self.process.wait()
+        ).await;
 
         Ok(())
     }
@@ -144,7 +188,24 @@ impl<C> GrpcProcess<C> {
         self.process
             .kill()
             .await
-            .map_err(|e| format!("Failed to kill process: {}", e))
+            .map_err(|e| format!("Failed to kill process: {}", e))?;
+        // Reap the process to prevent zombies
+        let _ = tokio::time::timeout(
+            Duration::from_millis(500),
+            self.process.wait()
+        ).await;
+        Ok(())
+    }
+}
+
+impl<C> Drop for GrpcProcess<C> {
+    fn drop(&mut self) {
+        // Safety net: kill the process group if it wasn't explicitly shut down.
+        // Prevents orphaned Python processes when tasks are cancelled or the runtime exits.
+        // If the process was already killed/reaped, id() returns None and this is a no-op.
+        if let Some(id) = self.process.inner().id() {
+            kill_process_group(id);
+        }
     }
 }
 

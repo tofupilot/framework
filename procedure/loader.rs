@@ -44,6 +44,16 @@ pub fn load_procedure_definition(file_path: &Path) -> Result<ProcedureDefinition
 
     for (_, phase) in procedure_def.get_all_phases_with_stage_scope() {
         phase.validate_single_runtime()?;
+        if let Some(ui) = &phase.ui {
+            if let Some(components) = &ui.components {
+                for comp in components {
+                    comp.validate_width()?;
+                    comp.validate_aspect()?;
+                    comp.validate_fit()?;
+                    comp.validate_options_count()?;
+                }
+            }
+        }
     }
 
     Ok(procedure_def)

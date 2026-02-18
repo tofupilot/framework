@@ -427,17 +427,17 @@ impl Drop for PlugServiceManager {
             self.id
         );
 
-        if let Ok(mut services) = self.services.try_lock() {
-            if !services.is_empty() {
-                log::warn!(
-                    "Found {} services still running during drop, attempting force teardown",
-                    services.len()
-                );
+        // get_mut() is infallible with &mut self — no lock contention possible
+        let services = self.services.get_mut();
+        if !services.is_empty() {
+            log::warn!(
+                "Found {} services still running during drop, attempting force teardown",
+                services.len()
+            );
 
-                for (plug_name, mut service) in services.drain() {
-                    log::debug!("Force killing plug {}", plug_name);
-                    let _ = service.process.start_kill();
-                }
+            for (plug_name, mut service) in services.drain() {
+                log::debug!("Force killing plug {}", plug_name);
+                let _ = service.process.start_kill();
             }
         }
 

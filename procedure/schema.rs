@@ -1444,6 +1444,11 @@ pub struct UIConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[validate(nested)]
     pub components: Option<Vec<UIComponent>>,
+
+    /// Override whether this UI requires user input (shows Continue button).
+    /// If not set, auto-detected from component types.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requires_input: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq, specta::Type)]
@@ -1510,6 +1515,10 @@ pub struct UIComponentYaml {
     #[serde(default)]
     options: Option<Vec<SelectOption>>,
 
+    // Grid columns (for image_choice / image_checklist)
+    #[serde(default)]
+    columns: Option<u32>,
+
     // Image/Layout
     #[serde(default)]
     width: Option<String>,
@@ -1566,6 +1575,9 @@ impl From<UIComponentYaml> for UIComponent {
             // Select/Choice Options
             options: yaml.options,
 
+            // Grid columns
+            columns: yaml.columns,
+
             // Image/Layout
             width: yaml.width,
             height: yaml.height,
@@ -1592,6 +1604,8 @@ pub enum UIComponentType {
     Multiselect,
     Checklist,
     Slider,
+    ImageChoice,
+    ImageChecklist,
     Text,
     Image,
     Progress,
@@ -1667,6 +1681,10 @@ pub struct UIComponent {
     #[validate(nested)]
     pub options: Option<Vec<SelectOption>>,
 
+    // Grid columns (for image_choice / image_checklist)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub columns: Option<u32>,
+
     // Image/Layout
     #[serde(skip_serializing_if = "Option::is_none")]
     #[validate(length(max = 50))]
@@ -1716,6 +1734,7 @@ impl UIComponent {
             max: self.max,
             step: self.step,
             options: self.options.clone(),
+            columns: self.columns,
             width: self.width.clone(),
             height: self.height.clone(),
             aspect: self.aspect.clone(),
@@ -1724,6 +1743,85 @@ impl UIComponent {
             color: self.color.clone(),
             font: self.font.clone(),
         }
+    }
+
+    pub fn validate_width(&self) -> Result<(), String> {
+        if let Some(ref w) = self.width {
+            let trimmed = w.trim();
+            if !trimmed.ends_with('%') {
+                return Err(format!(
+                    "Component '{}': width must be a percentage (e.g. '50%'), got '{}'",
+                    self.key, w
+                ));
+            }
+            let num_part = &trimmed[..trimmed.len() - 1];
+            match num_part.parse::<f64>() {
+                Ok(v) if v > 0.0 && v <= 100.0 => {}
+                _ => {
+                    return Err(format!(
+                        "Component '{}': width must be between 0% and 100%, got '{}'",
+                        self.key, w
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn validate_aspect(&self) -> Result<(), String> {
+        if let Some(ref a) = self.aspect {
+            let trimmed = a.trim();
+            if trimmed.is_empty() {
+                return Ok(());
+            }
+            match trimmed {
+                "16/9" | "4/3" | "3/4" | "2/3" | "9/16" | "square" | "auto" => {}
+                _ => {
+                    return Err(format!(
+                        "Component '{}': aspect must be one of '16/9', '4/3', '3/4', '2/3', '9/16', 'square', 'auto', got '{}'",
+                        self.key, a
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn validate_fit(&self) -> Result<(), String> {
+        if let Some(ref f) = self.fit {
+            let trimmed = f.trim();
+            if trimmed.is_empty() {
+                return Ok(());
+            }
+            match trimmed {
+                "contain" | "cover" | "fill" => {}
+                _ => {
+                    return Err(format!(
+                        "Component '{}': fit must be one of 'contain', 'cover', 'fill', got '{}'",
+                        self.key, f
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn validate_options_count(&self) -> Result<(), String> {
+        if matches!(
+            self.component_type,
+            UIComponentType::ImageChoice | UIComponentType::ImageChecklist
+        ) {
+            if let Some(opts) = &self.options {
+                if opts.len() > 12 {
+                    return Err(format!(
+                        "Component '{}' has {} options (max 12 for image_choice/image_checklist)",
+                        self.key,
+                        opts.len()
+                    ));
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -1745,6 +1843,9 @@ pub struct SelectOption {
     #[validate(length(max = 200))]
     #[serde(deserialize_with = "serde_trim::string_trim")]
     pub label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[validate(length(max = 500))]
+    pub image: Option<String>,
 }
 
 #[cfg(test)]

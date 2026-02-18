@@ -111,6 +111,49 @@ pub(super) fn validate_structure(
         }
     }
 
+    // Validate component width values (must be percentage like "50%")
+    for phase in &all_phases {
+        if let Some(ui) = &phase.ui {
+            if let Some(components) = &ui.components {
+                for comp in components {
+                    if let Err(msg) = comp.validate_width() {
+                        if let Some((line, col, len)) = location_map.get_phase_location(&phase.name) {
+                            diagnostics.push(ValidationDiagnostic::error(
+                                "invalid-width",
+                                msg,
+                                line,
+                                col,
+                                len,
+                            ));
+                        }
+                    }
+                    if let Err(msg) = comp.validate_aspect() {
+                        if let Some((line, col, len)) = location_map.get_phase_location(&phase.name) {
+                            diagnostics.push(ValidationDiagnostic::error(
+                                "invalid-aspect",
+                                msg,
+                                line,
+                                col,
+                                len,
+                            ));
+                        }
+                    }
+                    if let Err(msg) = comp.validate_fit() {
+                        if let Some((line, col, len)) = location_map.get_phase_location(&phase.name) {
+                            diagnostics.push(ValidationDiagnostic::error(
+                                "invalid-fit",
+                                msg,
+                                line,
+                                col,
+                                len,
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     let phase_keys_set: HashSet<String> = all_phases.iter().map(|p| p.key.clone()).collect();
     for phase in &all_phases {
         for dep in &phase.depends_on {

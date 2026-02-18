@@ -35,6 +35,7 @@ impl Orchestrator {
             if state.force_kill_requested {
                 log::error!("Force kill requested, breaking out of execution loop");
                 drop(state);
+                crate::features::operator_ui::channels::close_all_ui_channels().await;
                 break;
             }
 
@@ -42,12 +43,13 @@ impl Orchestrator {
             let busy_workers = state.worker_state.count_busy();
 
             if state.shutdown_requested || has_stop {
+                // Close UI channels on every iteration to handle race conditions
+                // where a phase registers its channel after the first close
+                crate::features::operator_ui::channels::close_all_ui_channels().await;
+
                 // Only emit shutdown events once
                 if !shutdown_events_emitted {
                     shutdown_events_emitted = true;
-
-                    // Close all pending UI response channels to unblock phases waiting for input
-                    crate::features::operator_ui::channels::close_all_ui_channels().await;
 
                     // Emit stopping status for running jobs
                     for worker_id in 0..state.worker_state.num_workers() {
