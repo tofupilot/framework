@@ -27,8 +27,106 @@ impl Orchestrator {
         app_handle: Option<AppHandle>,
         _permit: tokio::sync::OwnedSemaphorePermit,
     ) -> Result<(), String> {
-        // Set initial unit info on job for Python access
-        job.initial_unit_info = self.initial_unit_info.clone();
+        // Build phase_results and accumulated unit_info from completed phases (same slot or shared)
+        {
+            let state = self.state.read().await;
+            let mut phase_results: std::collections::HashMap<String, String> =
+                std::collections::HashMap::new();
+
+            // Collect completed job results relevant to this slot for unit info merging
+            let mut results_with_unit: Vec<&crate::execution::job::JobResult> = Vec::new();
+
+            for (job_id, info) in &state.job_info {
+                // Include results from same slot or shared phases
+                if info.slot_id == job.slot_id || info.slot_id.is_none() {
+                    if let Some(result) = state.job_results.get(job_id) {
+                        let mut data: serde_json::Map<String, serde_json::Value> = result
+                            .measurements
+                            .iter()
+                            .map(|m| (m.name.clone(), m.value.to_raw_json()))
+                            .collect();
+                        data.insert(
+                            "outcome".to_string(),
+                            serde_json::json!(result.phase_outcome),
+                        );
+                        let duration_ms =
+                            (result.completed_at - result.started_at).num_milliseconds();
+                        data.insert("duration_ms".to_string(), serde_json::json!(duration_ms));
+                        if let Ok(json) = serde_json::to_string(&data) {
+                            phase_results.insert(info.phase_key.clone(), json);
+                        }
+
+                        if result.unit.is_some() {
+                            results_with_unit.push(result);
+                        }
+                    }
+                }
+            }
+            job.phase_results = phase_results;
+
+            // Merge completed phases' unit info on top of initial_unit_info
+            // Same logic as reports/mod.rs finalize_report: only update fields that
+            // differ from the initial value (so phases can't accidentally reset fields)
+            let initial = &self.initial_unit_info;
+            let mut merged = initial.clone();
+
+            if !results_with_unit.is_empty() {
+                let initial_serial = initial.as_ref().and_then(|u| u.serial_number.clone());
+                let initial_part = initial.as_ref().and_then(|u| u.part_number.clone());
+                let initial_revision = initial.as_ref().and_then(|u| u.revision_number.clone());
+                let initial_batch = initial.as_ref().and_then(|u| u.batch_number.clone());
+                let initial_sub_units = initial.as_ref().and_then(|u| u.sub_units.clone()).unwrap_or_default();
+
+                results_with_unit.sort_by_key(|r| r.started_at);
+
+                for result in results_with_unit {
+                    if let Some(phase_unit) = &result.unit {
+                        merged = Some(match merged {
+                            Some(base) => {
+                                let merged_sub_units = match (base.sub_units, phase_unit.sub_units.clone()) {
+                                    (Some(mut base_subs), Some(phase_subs)) => {
+                                        for (key, value) in phase_subs {
+                                            if initial_sub_units.get(&key) != Some(&value) {
+                                                base_subs.insert(key, value);
+                                            }
+                                        }
+                                        Some(base_subs)
+                                    }
+                                    (Some(base_subs), None) => Some(base_subs),
+                                    (None, Some(phase_subs)) => {
+                                        let filtered: std::collections::HashMap<String, String> = phase_subs
+                                            .into_iter()
+                                            .filter(|(k, v)| initial_sub_units.get(k) != Some(v))
+                                            .collect();
+                                        if filtered.is_empty() { None } else { Some(filtered) }
+                                    }
+                                    (None, None) => None,
+                                };
+
+                                let merge_field = |phase_val: &Option<String>, base_val: Option<String>, initial_val: &Option<String>| -> Option<String> {
+                                    match phase_val {
+                                        Some(v) if phase_val != initial_val => Some(v.clone()),
+                                        _ => base_val,
+                                    }
+                                };
+
+                                crate::execution::types::UnitInfo {
+                                    serial_number: merge_field(&phase_unit.serial_number, base.serial_number, &initial_serial),
+                                    part_number: merge_field(&phase_unit.part_number, base.part_number, &initial_part),
+                                    revision_number: merge_field(&phase_unit.revision_number, base.revision_number, &initial_revision),
+                                    batch_number: merge_field(&phase_unit.batch_number, base.batch_number, &initial_batch),
+                                    sub_units: merged_sub_units,
+                                    status: phase_unit.status.clone(),
+                                }
+                            }
+                            None => phase_unit.clone(),
+                        });
+                    }
+                }
+            }
+
+            job.initial_unit_info = merged;
+        }
 
         // Build phase_results from completed phases (same slot or shared)
         {
