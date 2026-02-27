@@ -16,7 +16,7 @@
 - **Measurements:** Define limits, automatic pass/fail
 - **Plugs:** Equipment drivers as Python classes
 - **Cross-platform:** Windows, Linux, macOS
-- **Dashboard integration:** Integrates with [**TofuPilot Dashboard**](https://docs.tofupilot.com/docs/dashboard) for storage and analytics, or run standalone
+- **Dashboard integration:** Integrates with [**TofuPilot Dashboard**](https://tofupilot.com/docs/dashboard) for storage and analytics, or run standalone
 
 ## Get Started
 

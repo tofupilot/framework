@@ -43,5 +43,5 @@ Initialize
 
 ## Next Steps
 
-- [phases/dependencies](../../docs/framework/phases/dependencies) - Phase dependency patterns
+- [phases/depends-on](../../docs/framework/phases/depends-on) - Phase dependency patterns
 - [measurements-basic](../measurements-basic) - Measurement basics
