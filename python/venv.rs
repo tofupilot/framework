@@ -407,8 +407,3 @@ pub async fn resolve_python_internal(
     Ok(python_path.to_string_lossy().to_string())
 }
 
-#[tauri::command]
-#[specta::specta]
-pub async fn resolve_python(app: AppHandle, procedure_dir: String) -> Result<String, String> {
-    resolve_python_internal(Some(&app), Path::new(&procedure_dir)).await
-}

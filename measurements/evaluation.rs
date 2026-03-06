@@ -62,21 +62,10 @@ fn aggregation_value_to_json(value: &AggregationValue) -> Value {
     }
 }
 
-/// Convert JSON Value to AggregationValue
-fn json_to_aggregation_value(value: Value) -> AggregationValue {
-    match value {
-        Value::Number(n) => AggregationValue::Number(n.as_f64().unwrap_or(0.0)),
-        Value::String(s) => AggregationValue::String(s),
-        Value::Bool(b) => AggregationValue::Boolean(b),
-        Value::Object(obj) => AggregationValue::Object(obj),
-        _ => AggregationValue::Number(0.0), // Default for null or array
-    }
-}
-
 /// Auto-evaluate measurements by:
 /// 1. Merging YAML-defined validators with Python-provided validators
 /// 2. Auto-evaluating validators that have UNSET outcome
-/// 3. Computing aggregation values when needed
+/// 3. Evaluating aggregation validators (values must be provided by the caller)
 /// 4. Auto-evaluating aggregation validators
 pub fn auto_evaluate_measurements(
     mut measurements: Vec<Measurement>,
@@ -270,9 +259,10 @@ fn evaluate_single_validator(validator: &ValidatorSpec, actual_value: &Value) ->
     };
 
     // Evaluate based on operator
-    let pass = match operator.as_str() {
-        "==" => compare_values(actual_value, &expected, |a, e| a == e),
-        "!=" => compare_values(actual_value, &expected, |a, e| a != e),
+    // Returns None for type mismatches (e.g. numeric operator on string value)
+    let result = match operator.as_str() {
+        "==" => Some(compare_values(actual_value, &expected, |a, e| a == e)),
+        "!=" => Some(compare_values(actual_value, &expected, |a, e| a != e)),
         ">" => compare_numeric(actual_value, &expected, |a, e| a > e),
         ">=" => compare_numeric(actual_value, &expected, |a, e| a >= e),
         "<" => compare_numeric(actual_value, &expected, |a, e| a < e),
@@ -280,13 +270,13 @@ fn evaluate_single_validator(validator: &ValidatorSpec, actual_value: &Value) ->
         "in" => check_membership(actual_value, &expected, true),
         "not in" => check_membership(actual_value, &expected, false),
         "matches" => check_regex_match(actual_value, &expected),
-        _ => false,
+        _ => None,
     };
 
-    if pass {
-        ValidatorOutcome::Pass
-    } else {
-        ValidatorOutcome::Fail
+    match result {
+        Some(true) => ValidatorOutcome::Pass,
+        Some(false) => ValidatorOutcome::Fail,
+        None => ValidatorOutcome::Unset,
     }
 }
 
@@ -309,8 +299,8 @@ where
     op(actual, expected_scalar)
 }
 
-/// Compare numeric values
-fn compare_numeric<F>(actual: &Value, expected: &Value, op: F) -> bool
+/// Compare numeric values. Returns None on type mismatch.
+fn compare_numeric<F>(actual: &Value, expected: &Value, op: F) -> Option<bool>
 where
     F: Fn(f64, f64) -> bool,
 {
@@ -334,31 +324,31 @@ where
     };
 
     match (actual_num, expected_num) {
-        (Some(a), Some(e)) => op(a, e),
-        _ => false,
+        (Some(a), Some(e)) => Some(op(a, e)),
+        _ => None,
     }
 }
 
-/// Check if value is in/not in array
-fn check_membership(actual: &Value, expected: &Value, should_be_in: bool) -> bool {
+/// Check if value is in/not in array. Returns None if expected is not an array.
+fn check_membership(actual: &Value, expected: &Value, should_be_in: bool) -> Option<bool> {
     let arr = match expected.as_array() {
         Some(a) => a,
-        None => return false,
+        None => return None,
     };
 
     let is_member = arr.iter().any(|item| actual == item);
     if should_be_in {
-        is_member
+        Some(is_member)
     } else {
-        !is_member
+        Some(!is_member)
     }
 }
 
-/// Check if string matches regex pattern
-fn check_regex_match(actual: &Value, pattern: &Value) -> bool {
+/// Check if string matches regex pattern. Returns None on type mismatch or invalid regex.
+fn check_regex_match(actual: &Value, pattern: &Value) -> Option<bool> {
     let actual_str = match actual.as_str() {
         Some(s) => s,
-        None => return false,
+        None => return None,
     };
 
     // Extract pattern string (handle single-element array)
@@ -368,19 +358,19 @@ fn check_regex_match(actual: &Value, pattern: &Value) -> bool {
         if arr.len() == 1 {
             match arr[0].as_str() {
                 Some(s) => s,
-                None => return false,
+                None => return None,
             }
         } else {
-            return false;
+            return None;
         }
     } else {
-        return false;
+        return None;
     };
 
     // Compile and match regex
     match regex::Regex::new(pattern_str) {
-        Ok(re) => re.is_match(actual_str),
-        Err(_) => false,
+        Ok(re) => Some(re.is_match(actual_str)),
+        Err(_) => None,
     }
 }
 
@@ -460,16 +450,8 @@ fn merge_and_evaluate_aggregations(measurement: &mut Measurement, yaml_config: &
         }
     }
 
-    // Now evaluate all aggregations
-    let json_value = measurement_value_to_json(&measurement.value);
+    // Evaluate all aggregations (values must be provided by the caller, never computed here)
     for aggregation in &mut all_aggregations {
-        // Compute aggregation value if not already set
-        if aggregation.value.is_none() {
-            let computed_value =
-                compute_aggregation_value(&json_value, &aggregation.aggregation_type);
-            aggregation.value = Some(json_to_aggregation_value(computed_value.clone()));
-        }
-
         // Evaluate aggregation validators
         if let Some(validators) = &mut aggregation.validators {
             for validator in validators {
@@ -497,17 +479,10 @@ fn merge_and_evaluate_aggregations(measurement: &mut Measurement, yaml_config: &
 }
 
 /// Evaluate aggregations only (when no YAML config exists)
+/// Values must be provided by the caller, never computed here.
 fn evaluate_aggregations_only(measurement: &mut Measurement) {
     if let Some(aggregations) = &mut measurement.aggregations {
-        let json_value = measurement_value_to_json(&measurement.value);
         for aggregation in aggregations {
-            // Compute aggregation value if not already set
-            if aggregation.value.is_none() {
-                let computed_value =
-                    compute_aggregation_value(&json_value, &aggregation.aggregation_type);
-                aggregation.value = Some(json_to_aggregation_value(computed_value.clone()));
-            }
-
             // Evaluate aggregation validators
             if let Some(validators) = &mut aggregation.validators {
                 for validator in validators {
@@ -525,56 +500,6 @@ fn evaluate_aggregations_only(measurement: &mut Measurement) {
 
             // Set aggregation outcome based on validators
             aggregation.outcome = Some(determine_aggregation_outcome(&aggregation.validators));
-        }
-    }
-}
-
-/// Compute aggregation value based on type
-fn compute_aggregation_value(value: &Value, aggregation_type: &str) -> Value {
-    // Handle array values
-    if let Value::Array(arr) = value {
-        let numbers: Vec<f64> = arr.iter().filter_map(|v| v.as_f64()).collect();
-
-        if numbers.is_empty() {
-            return Value::Null;
-        }
-
-        match aggregation_type {
-            "mean" => {
-                let sum: f64 = numbers.iter().sum();
-                Value::from(sum / numbers.len() as f64)
-            }
-            "min" => numbers
-                .iter()
-                .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
-                .map(|&v| Value::from(v))
-                .unwrap_or(Value::Null),
-            "max" => numbers
-                .iter()
-                .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
-                .map(|&v| Value::from(v))
-                .unwrap_or(Value::Null),
-            "sum" => {
-                let sum: f64 = numbers.iter().sum();
-                Value::from(sum)
-            }
-            "count" => Value::from(numbers.len() as i64),
-            "std" => {
-                if numbers.len() < 2 {
-                    return Value::from(0.0);
-                }
-                let mean = numbers.iter().sum::<f64>() / numbers.len() as f64;
-                let variance =
-                    numbers.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / numbers.len() as f64;
-                Value::from(variance.sqrt())
-            }
-            _ => Value::Null,
-        }
-    } else {
-        // For non-array values, some aggregations still make sense
-        match aggregation_type {
-            "count" => Value::from(1),
-            _ => value.clone(), // Return the value itself for other aggregations
         }
     }
 }
@@ -608,28 +533,61 @@ fn determine_aggregation_outcome(validators: &Option<Vec<ValidatorSpec>>) -> Val
     }
 }
 
-/// Merge and evaluate validators and aggregations for MultiDimensional measurement axes
-fn merge_and_evaluate_multidim_axes(measurement: &mut Measurement, yaml_config: &MeasurementSpec) {
-    if let MeasurementValue::MultiDimensional(ref mut multidim_spec) = measurement.value {
-        // Try new style first (multi_dimensional object)
-        if let Some(yaml_multidim) = &yaml_config.multi_dimensional {
-            // Merge title from YAML if Python didn't provide it
-            if multidim_spec.title.is_none() && yaml_multidim.title.is_some() {
-                multidim_spec.title = yaml_multidim.title.clone();
-            }
+/// Match Python y_axes to YAML y_axes by key first, then fallback to index position
+fn match_y_axes_by_key<'a>(
+    python_y_axes: &'a mut [AxisSpec],
+    yaml_y_axes: &'a [AxisSpec],
+) -> Vec<(usize, Option<usize>)> {
+    let mut matches: Vec<(usize, Option<usize>)> = Vec::new();
+    let mut matched_yaml_indices: std::collections::HashSet<usize> = std::collections::HashSet::new();
 
-            // Evaluate x_axis
-            evaluate_axis(&mut multidim_spec.x_axis, &yaml_multidim.x_axis);
-
-            // Evaluate each y_axis
-            for (idx, python_y_axis) in multidim_spec.y_axis.iter_mut().enumerate() {
-                if let Some(yaml_y_axis) = yaml_multidim.y_axis.get(idx) {
-                    evaluate_axis(python_y_axis, yaml_y_axis);
+    // First pass: match by key
+    for (py_idx, py_axis) in python_y_axes.iter().enumerate() {
+        if let Some(py_key) = py_axis.get_key() {
+            for (yaml_idx, yaml_axis) in yaml_y_axes.iter().enumerate() {
+                if matched_yaml_indices.contains(&yaml_idx) {
+                    continue;
+                }
+                if let Some(yaml_key) = yaml_axis.get_key() {
+                    if py_key == yaml_key {
+                        matches.push((py_idx, Some(yaml_idx)));
+                        matched_yaml_indices.insert(yaml_idx);
+                        break;
+                    }
                 }
             }
         }
-        // Fall back to old style (x_axis and y_axis directly in MeasurementSpec)
-        else if yaml_config.x_axis.is_some() || yaml_config.y_axis.is_some() {
+    }
+
+    // Second pass: match remaining keyless Python axes by index position
+    let matched_py_indices: std::collections::HashSet<usize> =
+        matches.iter().map(|(py_idx, _)| *py_idx).collect();
+
+    let mut next_yaml_idx = 0;
+    for py_idx in 0..python_y_axes.len() {
+        if matched_py_indices.contains(&py_idx) {
+            continue;
+        }
+        // Find next unmatched YAML axis by index
+        while next_yaml_idx < yaml_y_axes.len() && matched_yaml_indices.contains(&next_yaml_idx) {
+            next_yaml_idx += 1;
+        }
+        if next_yaml_idx < yaml_y_axes.len() {
+            matches.push((py_idx, Some(next_yaml_idx)));
+            matched_yaml_indices.insert(next_yaml_idx);
+            next_yaml_idx += 1;
+        } else {
+            matches.push((py_idx, None));
+        }
+    }
+
+    matches
+}
+
+/// Merge and evaluate validators and aggregations for MultiDimensional measurement axes
+fn merge_and_evaluate_multidim_axes(measurement: &mut Measurement, yaml_config: &MeasurementSpec) {
+    if let MeasurementValue::MultiDimensional(ref mut multidim_spec) = measurement.value {
+        if yaml_config.x_axis.is_some() || yaml_config.y_axis.is_some() {
             // Merge title from YAML if Python didn't provide it
             if multidim_spec.title.is_none() && yaml_config.title.is_some() {
                 multidim_spec.title = yaml_config.title.clone();
@@ -640,11 +598,14 @@ fn merge_and_evaluate_multidim_axes(measurement: &mut Measurement, yaml_config: 
                 evaluate_axis(&mut multidim_spec.x_axis, yaml_x_axis);
             }
 
-            // Evaluate y_axis if YAML provides it
+            // Evaluate y_axis if YAML provides it using key-based matching
             if let Some(yaml_y_axes) = &yaml_config.y_axis {
-                for (idx, python_y_axis) in multidim_spec.y_axis.iter_mut().enumerate() {
-                    if let Some(yaml_y_axis) = yaml_y_axes.get(idx) {
-                        evaluate_axis(python_y_axis, yaml_y_axis);
+                let matches = match_y_axes_by_key(&mut multidim_spec.y_axis, yaml_y_axes);
+                for (py_idx, yaml_idx) in matches {
+                    if let Some(yaml_idx) = yaml_idx {
+                        if let Some(yaml_y_axis) = yaml_y_axes.get(yaml_idx) {
+                            evaluate_axis(&mut multidim_spec.y_axis[py_idx], yaml_y_axis);
+                        }
                     }
                 }
             }
@@ -659,9 +620,14 @@ fn evaluate_axis(python_axis: &mut AxisSpec, yaml_axis: &AxisSpec) {
         python_axis.unit = yaml_axis.unit.clone();
     }
 
-    // Merge legend from YAML if Python didn't provide it
-    if python_axis.legend.is_none() && yaml_axis.legend.is_some() {
-        python_axis.legend = yaml_axis.legend.clone();
+    // Merge legend from YAML (use get_legend to auto-generate from key if needed)
+    if python_axis.legend.is_none() && yaml_axis.get_legend().is_some() {
+        python_axis.legend = yaml_axis.get_legend();
+    }
+
+    // Merge key from YAML (use get_key to auto-generate from legend if needed)
+    if python_axis.key.is_none() && yaml_axis.get_key().is_some() {
+        python_axis.key = yaml_axis.get_key();
     }
 
     // Merge and evaluate axis validators

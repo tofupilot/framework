@@ -137,10 +137,28 @@ impl Orchestrator {
                 // Include results from same slot or shared phases
                 if info.slot_id == job.slot_id || info.slot_id.is_none() {
                     if let Some(result) = state.job_results.get(job_id) {
+                        // Skip intermediate retry attempts — only use the final attempt's results
+                        if result.phase_outcome == crate::execution::job::Outcome::Retry {
+                            continue;
+                        }
                         let mut data: serde_json::Map<String, serde_json::Value> = result
                             .measurements
                             .iter()
-                            .map(|m| (m.name.clone(), m.value.to_raw_json()))
+                            .map(|m| {
+                                if let Some(ref aggregations) = m.aggregations {
+                                    let agg_json = serde_json::to_value(aggregations)
+                                        .unwrap_or_default();
+                                    (
+                                        m.name.clone(),
+                                        serde_json::json!({
+                                            "__value__": m.value.to_raw_json(),
+                                            "__aggregations__": agg_json,
+                                        }),
+                                    )
+                                } else {
+                                    (m.name.clone(), m.value.to_raw_json())
+                                }
+                            })
                             .collect();
                         data.insert(
                             "outcome".to_string(),

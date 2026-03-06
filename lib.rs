@@ -55,7 +55,6 @@ pub fn run() {
             python::venv::get_python_state,
             python::venv::sync_python,
             python::venv::delete_venv,
-            python::venv::resolve_python,
             // Reports commands
             reports::get_report,
             reports::list_reports,

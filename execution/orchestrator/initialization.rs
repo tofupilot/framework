@@ -440,16 +440,23 @@ impl Orchestrator {
         }
 
         // Add plug scope operations to total job count for progress tracking
-        // Each plug has 2 scope operations: init + delete
-        let (procedure_plugs, slot_plugs): (Vec<_>, Vec<_>) = self.procedure_definition
-            .plugs
-            .iter()
-            .partition(|p| p.scope == crate::procedure::schema::Scope::All);
+        // emit_plug_scope_event fires once per scope-batch, not per-plug:
+        //   init:     1 event if all-scope plugs/SetupAll exist, 1 per slot if each-scope plugs/SetupEach exist
+        //   teardown: 1 event if all-scope plugs exist, 1 per slot if each-scope plugs exist
+        let has_all_scope_plugs = self.procedure_definition.plugs.iter().any(|p| p.scope == crate::procedure::schema::Scope::All);
+        let has_each_scope_plugs = self.procedure_definition.plugs.iter().any(|p| p.scope != crate::procedure::schema::Scope::All);
 
-        let procedure_plug_count = procedure_plugs.len();
-        let slot_plug_count = slot_plugs.len();
-        let plug_scope_operations =
-            (procedure_plug_count * 2) + (slot_plug_count * slots.len() * 2);
+        let all_phases = self.procedure_definition.get_all_phases_with_stage_scope();
+        let has_setup_all = all_phases.iter().any(|(s, p)| matches!(s, crate::procedure::schema::StageScope::SetupAll) && !p.should_skip());
+        let has_setup_each = all_phases.iter().any(|(s, p)| matches!(s, crate::procedure::schema::StageScope::SetupEach) && !p.should_skip());
+
+        let init_events =
+            (if has_all_scope_plugs || has_setup_all { 1 } else { 0 })
+            + (if has_each_scope_plugs || has_setup_each { slots.len() } else { 0 });
+        let teardown_events =
+            (if has_all_scope_plugs { 1 } else { 0 })
+            + (if has_each_scope_plugs { slots.len() } else { 0 });
+        let plug_scope_operations = init_events + teardown_events;
         state.total_jobs_submitted += plug_scope_operations;
 
         // Emit execution plan to frontend

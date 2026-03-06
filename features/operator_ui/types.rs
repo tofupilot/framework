@@ -22,12 +22,13 @@ impl UiConfig {
     }
 
     /// Check if this UI requires user input.
-    /// If `requires_input` is set in the procedure YAML, use that override.
-    /// Otherwise, auto-detect from component types.
-    /// If true, orchestrator will wait for user submission.
-    /// If false, UI is display-only and completes automatically.
+    /// If any input component exists, always requires input (cannot be overridden).
+    /// Otherwise, use `requires_input` from the procedure YAML (defaults to false).
     pub fn requires_user_input(&self) -> bool {
-        self.requires_input.unwrap_or_else(|| self.has_input_components())
+        if self.has_input_components() {
+            return true;
+        }
+        self.requires_input.unwrap_or(false)
     }
 
     /// Check if this UI should auto-continue (inverse of requires_user_input)

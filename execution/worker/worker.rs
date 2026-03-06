@@ -44,13 +44,17 @@ impl From<&crate::features::operator_ui::UiComponent> for UiComponent {
 /// Returns None if value_json cannot be parsed
 fn try_measurement_from_grpc(m: Measurement) -> Option<crate::measurements::Measurement> {
     let value = serde_json::from_str(&m.value_json).ok()?;
+    let aggregations = m
+        .aggregations_json
+        .as_ref()
+        .and_then(|json| serde_json::from_str(json).ok());
     Some(crate::measurements::Measurement {
         name: m.name,
         value,
         unit: m.unit,
         timestamp: m.timestamp,
         validators: None,
-        aggregations: None,
+        aggregations,
         description: None,
     })
 }
@@ -240,7 +244,7 @@ impl Worker {
                 }
             }
 
-            Some(rx)
+            Some((request_id, rx))
         } else if has_ui && !requires_user_input {
             // Display-only UI, emit but don't wait
             if let Some(app) = &app_handle {
@@ -325,21 +329,64 @@ impl Worker {
 
             match event.event {
                 Some(Event::JobComplete(grpc_result)) => {
-                    // If UI requires user input, wait for submission before completing
-                    // and extract any bound unit info from the UI response
-                    let mut ui_unit_info: Option<crate::execution::types::UnitInfo> = None;
-                    if let Some(rx) = ui_response_rx {
-                        log::debug!("Python phase {} finished, waiting for UI submission", job.phase_name);
+                    // Check phase result to determine if we should wait for UI
+                    let phase_result = grpc_result
+                        .phase_result_json
+                        .as_ref()
+                        .and_then(|json| serde_json::from_str(json).ok())
+                        .and_then(|pr: crate::features::operator_ui::PythonPhaseResult| {
+                            crate::execution::job::PhaseResult::from_python_result(&pr).ok()
+                        })
+                        .unwrap_or(crate::execution::job::PhaseResult::Continue);
 
-                        match rx.await {
+                    let is_terminal = matches!(
+                        phase_result,
+                        crate::execution::job::PhaseResult::Skip
+                            | crate::execution::job::PhaseResult::Stop
+                            | crate::execution::job::PhaseResult::Fail
+                    ) || grpc_result.error.is_some();
+
+                    let mut ui_unit_info: Option<crate::execution::types::UnitInfo> = None;
+                    let mut ui_bound_measurements: Option<HashMap<String, serde_json::Value>> = None;
+                    if let Some((request_id, mut rx)) = ui_response_rx {
+                        // Check if UI was already submitted before Python finished
+                        match rx.try_recv() {
                             Ok(ui_values) => {
-                                log::debug!("Received UI submission for phase {}", job.phase_name);
-                                // Extract bound unit info from UI submission
-                                if let Some((unit_info, _bound)) = extract_bound_measurements(&ui_values) {
+                                // UI was submitted before Python completed — use the data
+                                log::debug!("UI already submitted for phase {}", job.phase_name);
+                                if let Some((unit_info, bound)) = extract_bound_measurements(&ui_values) {
                                     ui_unit_info = unit_info;
+                                    ui_bound_measurements = Some(bound);
                                 }
                             }
-                            Err(_) => {
+                            Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {
+                                if is_terminal {
+                                    // Terminal result and UI not yet submitted — dismiss UI
+                                    log::debug!(
+                                        "Python phase {} returned terminal result {:?}, dismissing UI",
+                                        job.phase_name, phase_result
+                                    );
+                                    drop(rx);
+                                    let mut channels = crate::features::operator_ui::UI_RESPONSE_CHANNELS.lock().await;
+                                    channels.remove(&request_id);
+                                } else {
+                                    // Continue result — wait for operator to submit
+                                    log::debug!("Python phase {} finished, waiting for UI submission", job.phase_name);
+                                    match rx.await {
+                                        Ok(ui_values) => {
+                                            log::debug!("Received UI submission for phase {}", job.phase_name);
+                                            if let Some((unit_info, bound)) = extract_bound_measurements(&ui_values) {
+                                                ui_unit_info = unit_info;
+                                                ui_bound_measurements = Some(bound);
+                                            }
+                                        }
+                                        Err(_) => {
+                                            log::warn!("UI response channel closed for phase {}", job.phase_name);
+                                        }
+                                    }
+                                }
+                            }
+                            Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
                                 log::warn!("UI response channel closed for phase {}", job.phase_name);
                             }
                         }
@@ -347,8 +394,47 @@ impl Worker {
 
                     let end_time = chrono::Utc::now();
 
+                    // Save phase measurements before job is consumed by convert_job_result
+                    let phase_measurements = job.phase_measurements.clone();
+
                     // Convert gRPC result to JobResult
                     let mut job_result = self.convert_job_result(grpc_result, start_time, end_time, job)?;
+
+                    // Merge UI bound measurements: UI fills in what Python didn't set,
+                    // Python wins on conflicts (same measurement name)
+                    if let Some(bound) = ui_bound_measurements {
+                        let existing_names: std::collections::HashSet<String> = job_result
+                            .measurements
+                            .iter()
+                            .map(|m| m.name.clone())
+                            .collect();
+                        let bound_measurements = convert_bound_to_measurements(bound);
+
+                        // Evaluate bound measurements with YAML definitions (validators, units, etc.)
+                        let phase_config = crate::procedure::schema::PhaseDefinition {
+                            measurements: phase_measurements,
+                            key: String::new(),
+                            name: String::new(),
+                            scope: None,
+                            python: None,
+                            executable: None,
+                            description: None,
+                            depends_on: Vec::new(),
+                            ui: None,
+                            enabled: true,
+                            result: None,
+                            timeout: None,
+                            retry: None,
+                            then: None,
+                        };
+                        let evaluated_bound = crate::measurements::auto_evaluate_measurements(bound_measurements, &phase_config);
+
+                        for m in evaluated_bound {
+                            if !existing_names.contains(&m.name) {
+                                job_result.measurements.push(m);
+                            }
+                        }
+                    }
 
                     // Merge UI unit info if present
                     if let Some(ui_unit) = ui_unit_info {

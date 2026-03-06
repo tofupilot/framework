@@ -111,6 +111,33 @@ pub(super) fn validate_structure(
         }
     }
 
+    // Validate y_axis entries have at least key or legend
+    for phase in &all_phases {
+        for meas in &phase.measurements {
+            let y_axes = meas.y_axis.as_ref();
+            if let Some(axes) = y_axes {
+                for (i, axis) in axes.iter().enumerate() {
+                    let has_key = axis.key.as_ref().is_some_and(|k| !k.is_empty());
+                    let has_legend = axis.legend.as_ref().is_some_and(|l| !l.is_empty());
+                    if !has_key && !has_legend {
+                        if let Some((line, col, len)) = location_map.get_phase_location(&phase.name) {
+                            diagnostics.push(ValidationDiagnostic::error(
+                                "missing-y-axis-key-or-legend",
+                                format!(
+                                    "Phase '{}', measurement '{}': y_axis[{}] must have at least 'key' or 'legend'",
+                                    phase.name, meas.name, i
+                                ),
+                                line,
+                                col,
+                                len,
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // Validate component width values (must be percentage like "50%")
     for phase in &all_phases {
         if let Some(ui) = &phase.ui {
@@ -143,6 +170,50 @@ pub(super) fn validate_structure(
                             diagnostics.push(ValidationDiagnostic::error(
                                 "invalid-fit",
                                 msg,
+                                line,
+                                col,
+                                len,
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Validate axis validator operators (only == and != allowed on axis data)
+    for phase in &all_phases {
+        for meas in &phase.measurements {
+            let mut axes_to_check: Vec<(String, usize, &crate::procedure::schema::ValidatorSpec)> = Vec::new();
+
+            // Collect validators from axes
+            if let Some(ref x) = meas.x_axis {
+                if let Some(ref validators) = x.validators {
+                    for (vi, v) in validators.iter().enumerate() {
+                        axes_to_check.push(("x_axis".to_string(), vi, v));
+                    }
+                }
+            }
+            if let Some(ref y_axes) = meas.y_axis {
+                for (yi, y) in y_axes.iter().enumerate() {
+                    if let Some(ref validators) = y.validators {
+                        for (vi, v) in validators.iter().enumerate() {
+                            axes_to_check.push((format!("y_axis[{}]", yi), vi, v));
+                        }
+                    }
+                }
+            }
+
+            for (axis_label, vi, validator) in &axes_to_check {
+                if let Some(ref op) = validator.operator {
+                    if op != "==" && op != "!=" {
+                        if let Some((line, col, len)) = location_map.get_phase_location(&phase.name) {
+                            diagnostics.push(ValidationDiagnostic::error(
+                                "invalid-axis-validator-operator",
+                                format!(
+                                    "Phase '{}', measurement '{}', {}.validators[{}]: operator '{}' is not valid for axis data (only '==' and '!=' are allowed)",
+                                    phase.name, meas.name, axis_label, vi, op
+                                ),
                                 line,
                                 col,
                                 len,

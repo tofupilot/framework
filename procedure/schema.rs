@@ -1295,7 +1295,7 @@ pub enum AxisData {
     String(Vec<String>),
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone, specta::Type)]
+#[derive(Debug, Deserialize, Clone, specta::Type)]
 pub struct AxisSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub data: Option<AxisData>,
@@ -1303,12 +1303,105 @@ pub struct AxisSpec {
     pub unit: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "serde_trim::option_string_trim")]
     pub legend: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "serde_trim::option_string_trim")]
+    pub key: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub aggregations: Option<Vec<AggregationSpec>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub validators: Option<Vec<ValidatorSpec>>,
     #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "serde_trim::option_string_trim")]
     pub description: Option<String>,
+}
+
+impl serde::Serialize for AxisSpec {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        // Count non-None fields for struct size hint
+        let mut count = 0;
+        if self.data.is_some() { count += 1; }
+        if self.get_key().is_some() { count += 1; }
+        if self.get_legend().is_some() { count += 1; }
+        if self.unit.is_some() { count += 1; }
+        if self.aggregations.is_some() { count += 1; }
+        if self.validators.is_some() { count += 1; }
+        if self.description.is_some() { count += 1; }
+
+        let mut state = serializer.serialize_struct("AxisSpec", count)?;
+        if let Some(ref data) = self.data {
+            state.serialize_field("data", data)?;
+        }
+        if let Some(ref unit) = self.unit {
+            state.serialize_field("unit", unit)?;
+        }
+        // Always serialize resolved legend and key
+        if let Some(legend) = self.get_legend() {
+            state.serialize_field("legend", &legend)?;
+        }
+        if let Some(key) = self.get_key() {
+            state.serialize_field("key", &key)?;
+        }
+        if let Some(ref aggs) = self.aggregations {
+            state.serialize_field("aggregations", aggs)?;
+        }
+        if let Some(ref vals) = self.validators {
+            state.serialize_field("validators", vals)?;
+        }
+        if let Some(ref desc) = self.description {
+            state.serialize_field("description", desc)?;
+        }
+        state.end()
+    }
+}
+
+impl AxisSpec {
+    /// Returns the explicit key, or auto-generates one from legend via to_python_identifier
+    pub fn get_key(&self) -> Option<String> {
+        if let Some(ref key) = self.key {
+            if !key.is_empty() {
+                return Some(key.clone());
+            }
+        }
+        if let Some(ref legend) = self.legend {
+            let generated = crate::python::identifier::to_python_identifier(legend);
+            if !generated.is_empty() {
+                return Some(generated);
+            }
+        }
+        None
+    }
+
+    /// Returns the explicit legend, or auto-generates one from key (title-cased)
+    pub fn get_legend(&self) -> Option<String> {
+        if let Some(ref legend) = self.legend {
+            if !legend.is_empty() {
+                return Some(legend.clone());
+            }
+        }
+        if let Some(ref key) = self.key {
+            if !key.is_empty() {
+                // Title-case: "voltage_output" -> "Voltage Output"
+                return Some(
+                    key.split('_')
+                        .filter(|s| !s.is_empty())
+                        .map(|word| {
+                            let mut chars = word.chars();
+                            match chars.next() {
+                                Some(c) => {
+                                    c.to_uppercase().to_string() + &chars.collect::<String>()
+                                }
+                                None => String::new(),
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                );
+            }
+        }
+        None
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, specta::Type)]
@@ -1335,8 +1428,6 @@ pub struct MeasurementSpecYaml {
     pub aggregations: Option<Vec<AggregationSpec>>,
     #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "serde_trim::option_string_trim")]
     pub description: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub multi_dimensional: Option<MultiDimensionalSpec>,
     #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "serde_trim::option_string_trim")]
     pub title: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1369,9 +1460,6 @@ pub struct MeasurementSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
 
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub multi_dimensional: Option<MultiDimensionalSpec>,
-
     #[validate(length(max = 200))]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
@@ -1402,7 +1490,6 @@ impl From<MeasurementSpecYaml> for MeasurementSpec {
             validators: yaml.validators,
             aggregations: yaml.aggregations,
             description: yaml.description,
-            multi_dimensional: yaml.multi_dimensional,
             title: yaml.title,
             x_axis: yaml.x_axis,
             y_axis: yaml.y_axis,
@@ -1420,7 +1507,6 @@ impl MeasurementSpec {
             validators: self.validators.clone(),
             aggregations: self.aggregations.clone(),
             description: self.description.clone(),
-            multi_dimensional: self.multi_dimensional.clone(),
             title: self.title.clone(),
             x_axis: self.x_axis.clone(),
             y_axis: self.y_axis.clone(),
