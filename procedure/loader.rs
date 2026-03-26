@@ -42,6 +42,11 @@ pub fn load_procedure_definition(file_path: &Path) -> Result<ProcedureDefinition
         .validate()
         .map_err(|e| format!("Validation failed: {}", e))?;
 
+    if let Some(unit) = &procedure_def.unit {
+        unit.validate_auto_identify()
+            .map_err(|e| format!("Validation failed: {}", e))?;
+    }
+
     for (_, phase) in procedure_def.get_all_phases_with_stage_scope() {
         phase.validate_single_runtime()?;
         if let Some(ui) = &phase.ui {

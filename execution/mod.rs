@@ -64,7 +64,7 @@ pub struct OrchestratorState {
         Arc<TokioMutex<HashMap<String, Arc<tokio::sync::RwLock<Vec<worker::Worker>>>>>>,
     pub resource_manager_refs:
         Arc<TokioMutex<HashMap<String, Arc<tokio::sync::RwLock<crate::plugs::manager::ResourceManager>>>>>,
-    pub pending_unit_inputs: Arc<TokioMutex<HashMap<String, PendingUnitInput>>>,
+    pub pending_unit_inputs: Arc<TokioMutex<HashMap<String, HashMap<String, PendingUnitInput>>>>,
     pub pending_initializations: Arc<TokioMutex<HashMap<String, PendingInitialization>>>,
 }
 

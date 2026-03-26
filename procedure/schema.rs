@@ -501,6 +501,11 @@ impl validator::Validate for SubUnitsConfig {
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default, Validate, specta::Type)]
 pub struct UnitConfig {
+    /// When true, automatically submit unit identification using default_value fields.
+    /// Requires serial_number.default_value and part_number.default_value to be set.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub auto_identify: bool,
+
     /// Serial number field configuration
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub serial_number: Option<UnitFieldConfig>,
@@ -521,6 +526,39 @@ pub struct UnitConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[validate(nested)]
     pub sub_units: Option<SubUnitsConfig>,
+}
+
+impl UnitConfig {
+    /// Validates that auto_identify requirements are met:
+    /// serial_number and part_number must both have a default_value set.
+    pub fn validate_auto_identify(&self) -> Result<(), String> {
+        if !self.auto_identify {
+            return Ok(());
+        }
+
+        let sn_ok = self
+            .serial_number
+            .as_ref()
+            .and_then(|f| f.default_value.as_ref())
+            .map(|v| !v.trim().is_empty())
+            .unwrap_or(false);
+
+        let pn_ok = self
+            .part_number
+            .as_ref()
+            .and_then(|f| f.default_value.as_ref())
+            .map(|v| !v.trim().is_empty())
+            .unwrap_or(false);
+
+        if !sn_ok {
+            return Err("auto_identify requires serial_number.default_value to be set".to_string());
+        }
+        if !pn_ok {
+            return Err("auto_identify requires part_number.default_value to be set".to_string());
+        }
+
+        Ok(())
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Validate, Clone, specta::Type)]
@@ -634,7 +672,6 @@ pub enum PhaseNextAction {
     Continue,
     Stop,
     Retry,
-    Skip,
 }
 
 #[derive(Debug, Serialize, Deserialize, Validate, Clone, specta::Type)]

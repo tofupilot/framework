@@ -7,7 +7,7 @@ pub fn determine_next_action(
     phase_def: Option<&PhaseDefinition>,
     should_stop_on_first_failure: bool,
 ) -> PhaseNextAction {
-    if matches!(phase_outcome, Outcome::Error | Outcome::Timeout | Outcome::Stop) {
+    if matches!(phase_outcome, Outcome::Stop) {
         return PhaseNextAction::Stop;
     }
 
@@ -42,10 +42,11 @@ fn get_next_action_for_phase(
         let configured = match outcome {
             Outcome::Pass => then_config.pass.clone(),
             Outcome::Fail => then_config.fail.clone(),
-            Outcome::Timeout => then_config.timeout.clone().or(then_config.error.clone()),
+            Outcome::Timeout => then_config.timeout.clone(),
+            Outcome::Error => then_config.error.clone(),
             Outcome::Skip => None,
             Outcome::Retry => None,
-            Outcome::Error | Outcome::Stop => None,
+            Outcome::Stop => None,
         };
 
         if let Some(next_action) = configured {

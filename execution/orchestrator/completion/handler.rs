@@ -256,10 +256,7 @@ impl Orchestrator {
     ) -> bool {
         let outcome = job_result.phase_outcome;
 
-        let is_terminal_outcome =
-            matches!(outcome, Outcome::Error | Outcome::Timeout | Outcome::Stop);
-
-        if is_terminal_outcome {
+        if matches!(outcome, Outcome::Stop) {
             self.handle_stop(state, event, job_result, app_handle).await;
             return false;
         }
@@ -270,7 +267,7 @@ impl Orchestrator {
                 self.handle_stop(state, event, job_result, app_handle).await;
                 false
             }
-            PhaseNextAction::Continue | PhaseNextAction::Skip => {
+            PhaseNextAction::Continue => {
                 state.complete_job_with_info(event.job_id, &event.original_job, job_result);
                 true
             }

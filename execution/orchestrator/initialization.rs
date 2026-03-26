@@ -47,6 +47,7 @@ impl Orchestrator {
         &mut self,
         procedure_path: &std::path::Path,
         slots: &[String],
+        unit_infos: &std::collections::HashMap<String, crate::execution::types::UnitInfo>,
     ) -> Result<(), String> {
         // Store the execution ID
 
@@ -61,12 +62,17 @@ impl Orchestrator {
 
             let mut report_manager = ReportManager::new(procedure_path)?;
 
+            // Look up per-slot unit info; fall back to first entry if slot not found
+            let slot_unit_info = unit_infos.get(slot_id)
+                .or_else(|| unit_infos.values().next())
+                .cloned();
+
             report_manager.start_report(
                 &slot_run_id,
                 &self.execution_id,
                 Some(slot_id),
                 &self.procedure_definition,
-                self.initial_unit_info.clone(),
+                slot_unit_info,
             )?;
 
             // Store the run_id if this is the first slot
@@ -81,16 +87,12 @@ impl Orchestrator {
         &mut self,
         slots: Vec<String>,
         execution_strategy: ExecutionStrategy,
-        initial_unit_info: crate::execution::types::UnitInfo,
+        initial_unit_infos: std::collections::HashMap<String, crate::execution::types::UnitInfo>,
     ) -> Result<(), String> {
         // Store procedure definition
 
-        // Store initial unit info FIRST before anything else uses it
-        log::trace!(
-            "📋 submit_procedure: initial_unit_info = serial:{:?}, part:{:?}",
-            initial_unit_info.serial_number, initial_unit_info.part_number
-        );
-        self.initial_unit_info = Some(initial_unit_info.clone());
+        // Store initial unit infos FIRST before anything else uses it
+        self.initial_unit_infos = initial_unit_infos.clone();
 
         // Extract plug scopes and pass to ResourceManager
         {

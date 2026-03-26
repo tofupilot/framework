@@ -259,10 +259,18 @@ impl ReportManager {
                     })
                     .unwrap_or_default();
 
-                // Collect all job results with unit info, sorted by declaration order
+                // Collect slot-specific job results with unit info, sorted by declaration order.
+                // Shared phases (slot_id = None) are excluded: their unit info comes from an
+                // arbitrary slot's initial values and would incorrectly overwrite this slot's data.
                 let mut job_results_with_unit: Vec<_> = job_results
                     .iter()
-                    .filter(|(_, r)| r.unit.is_some())
+                    .filter(|(id, r)| {
+                        r.unit.is_some()
+                            && job_info
+                                .get(id)
+                                .map(|info| info.slot_id.is_some())
+                                .unwrap_or(false)
+                    })
                     .collect();
                 job_results_with_unit.sort_by(|(id_a, a), (id_b, b)| {
                     let pos_a = job_info.get(id_a)

@@ -237,7 +237,7 @@ impl Orchestrator {
                     queued_jobs: 0,
                     workers_busy: 0,
                     workers_total: stats.workers_total,
-                    run_outcome: stats.run_outcome,
+                    run_outcome: stats.slot_outcomes.get(slot_id).copied().or(stats.run_outcome),
                     run_dir: None,
                     run_id: None,
                     slot_outcomes: HashMap::new(),

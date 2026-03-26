@@ -127,16 +127,21 @@ pub fn run(procedure_path: PathBuf) {
             }
         };
 
-        // Set unit info BEFORE initializing report managers (same order as GUI flow)
-        orchestrator.set_initial_unit_info(unit_info.clone());
+        // Set unit infos BEFORE initializing report managers (same order as GUI flow)
+        // In CLI mode, all slots share the same unit info
+        let unit_infos: std::collections::HashMap<String, UnitInfo> = slots.iter()
+            .map(|slot_id| (slot_id.clone(), unit_info.clone()))
+            .collect();
+
+        orchestrator.set_initial_unit_infos(unit_infos.clone());
 
         let _ = orchestrator
-            .initialize_report_managers(&procedure_path, &slots)
+            .initialize_report_managers(&procedure_path, &slots, &unit_infos)
             .await;
 
         let strategy = procedure_def.execution.as_ref().map(|e| e.strategy).unwrap_or(crate::procedure::schema::ExecutionStrategy::PhaseFirst);
         if let Err(e) = orchestrator
-            .submit_procedure(slots, strategy, unit_info)
+            .submit_procedure(slots, strategy, unit_infos)
             .await
         {
             log::error!("Failed to submit procedure: {}", e);

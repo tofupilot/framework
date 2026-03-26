@@ -19,6 +19,7 @@ use crate::validation;
 #[derive(Debug, Clone, Serialize, Event, Type)]
 pub struct UnitInputRequestEvent {
     pub execution_id: String,
+    pub slot_id: String,
     pub unit_config: Option<UnitConfig>,
 }
 
@@ -62,6 +63,20 @@ pub struct OrchestratorCleanupCompleteEvent {
 #[derive(Debug, Clone, Serialize, Event, Type)]
 pub struct OrchestratorTeardownCompleteEvent {
     pub execution_id: String,
+}
+
+/// Emitted when unit identification is automatically resolved via auto_identify.
+/// The frontend uses this to mark unit input as complete without showing the form.
+#[derive(Debug, Clone, Serialize, Event, Type)]
+pub struct UnitInputAutoEvent {
+    pub execution_id: String,
+    pub slot_id: String,
+    pub unit_config: Option<UnitConfig>,
+    pub serial_number: String,
+    pub part_number: String,
+    pub revision_number: Option<String>,
+    pub batch_number: Option<String>,
+    pub sub_units: Option<HashMap<String, String>>,
 }
 
 async fn emit_cancellation_cleanup(
@@ -115,6 +130,7 @@ async fn resolve_execution_id(
     orchestrator_state: &OrchestratorState,
 ) -> String {
     if execution_id == "pending" {
+        // pending_unit_inputs outer key = execution_id
         let pending = orchestrator_state.pending_unit_inputs.lock().await;
         pending.keys().next().cloned().unwrap_or_else(|| execution_id.to_string())
     } else {
@@ -130,6 +146,7 @@ async fn cancel_pending_unit_input(
 ) -> bool {
     let was_pending = {
         let mut pending = orchestrator_state.pending_unit_inputs.lock().await;
+        // Remove the entire execution entry (all slots)
         pending.remove(execution_id).is_some()
     };
 
@@ -150,6 +167,7 @@ pub async fn execute_parallel_runs(
     slots: Vec<String>,
     worker_count_override: Option<u32>,
     strategy: Option<String>,
+    prefill_units: Option<HashMap<String, HashMap<String, String>>>,
     orchestrator_state: State<'_, OrchestratorState>,
 ) -> Result<String, String> {
     let procedure_file_buf = PathBuf::from(&procedure_file);
@@ -187,25 +205,134 @@ pub async fn execute_parallel_runs(
 
     log::info!("Starting parallel initialization for execution {}", execution_id_str);
 
-    // === EMIT UNIT INPUT REQUEST IMMEDIATELY ===
-    // This allows the user to start filling the form while initialization happens in background
-    let (unit_input_tx, unit_input_rx) = tokio::sync::oneshot::channel();
-    {
-        let mut pending_unit_inputs = orchestrator_state.pending_unit_inputs.lock().await;
-        pending_unit_inputs.insert(
-            execution_id_str.clone(),
-            PendingUnitInput {
-                sender: unit_input_tx,
-                unit_config: procedure_def.unit.clone(),
-            },
-        );
+    // === UNIT INPUT: auto_identify or interactive (per slot) ===
+    let auto_identify = procedure_def.unit.as_ref().map(|u| u.auto_identify).unwrap_or(false);
+
+    // Create one channel per slot
+    let mut slot_txs: HashMap<String, tokio::sync::oneshot::Sender<UnitInfo>> = HashMap::new();
+    let mut slot_rxs: HashMap<String, tokio::sync::oneshot::Receiver<UnitInfo>> = HashMap::new();
+    for slot_id in &slots {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        slot_txs.insert(slot_id.clone(), tx);
+        slot_rxs.insert(slot_id.clone(), rx);
     }
 
-    let _ = UnitInputRequestEvent {
-        execution_id: execution_id_str.clone(),
-        unit_config: procedure_def.unit.clone(),
+    if let Some(ref prefill) = prefill_units {
+        // "Run again": use prefilled unit data per slot, skip interactive prompt
+        for slot_id in &slots {
+            let slot_data = prefill.get(slot_id).cloned().unwrap_or_default();
+
+            let serial_number = slot_data.get("serial_number").cloned().unwrap_or_default();
+            let part_number = slot_data.get("part_number").cloned().unwrap_or_default();
+            let revision_number = slot_data.get("revision_number").cloned();
+            let batch_number = slot_data.get("batch_number").cloned();
+            let sub_units: Option<HashMap<String, String>> = {
+                let map: HashMap<String, String> = slot_data.iter()
+                    .filter_map(|(k, v)| k.strip_prefix("sub_unit:").map(|label| (label.to_string(), v.clone())))
+                    .collect();
+                if map.is_empty() { None } else { Some(map) }
+            };
+
+            let unit_info = UnitInfo {
+                serial_number: Some(serial_number.clone()),
+                part_number: Some(part_number.clone()),
+                revision_number: revision_number.clone(),
+                batch_number: batch_number.clone(),
+                sub_units: sub_units.clone(),
+                status: "complete".to_string(),
+            };
+
+            validate_unit_info(&unit_info, &procedure_def.unit)?;
+
+            let _ = UnitInputAutoEvent {
+                execution_id: execution_id_str.clone(),
+                slot_id: slot_id.clone(),
+                unit_config: procedure_def.unit.clone(),
+                serial_number: serial_number.clone(),
+                part_number: part_number.clone(),
+                revision_number: revision_number.clone(),
+                batch_number: batch_number.clone(),
+                sub_units: sub_units.clone(),
+            }
+            .emit(&app_handle);
+
+            if let Some(tx) = slot_txs.remove(slot_id) {
+                let _ = tx.send(unit_info);
+            }
+        }
+    } else if auto_identify {
+        // Build UnitInfo directly from default_value fields — no user input needed
+        let unit = procedure_def.unit.as_ref().expect("unit config required for auto_identify");
+        let serial_number = unit.serial_number.as_ref()
+            .and_then(|f| f.default_value.clone())
+            .unwrap_or_default();
+        let part_number = unit.part_number.as_ref()
+            .and_then(|f| f.default_value.clone())
+            .unwrap_or_default();
+        let revision_number = unit.revision_number.as_ref()
+            .and_then(|f| f.default_value.clone());
+        let batch_number = unit.batch_number.as_ref()
+            .and_then(|f| f.default_value.clone());
+        let sub_units: Option<HashMap<String, String>> = unit.sub_units.as_ref().map(|items| {
+            items.0.iter().filter_map(|item| {
+                item.serial_number.as_ref()
+                    .and_then(|f| f.default_value.clone())
+                    .map(|val| (item.get_key(), val))
+            }).collect()
+        }).filter(|m: &HashMap<String, String>| !m.is_empty());
+
+        // Emit one auto event per slot and send to all channels immediately
+        for slot_id in &slots {
+            let _ = UnitInputAutoEvent {
+                execution_id: execution_id_str.clone(),
+                slot_id: slot_id.clone(),
+                unit_config: procedure_def.unit.clone(),
+                serial_number: serial_number.clone(),
+                part_number: part_number.clone(),
+                revision_number: revision_number.clone(),
+                batch_number: batch_number.clone(),
+                sub_units: sub_units.clone(),
+            }
+            .emit(&app_handle);
+
+            let auto_unit_info = UnitInfo {
+                serial_number: Some(serial_number.clone()),
+                part_number: Some(part_number.clone()),
+                revision_number: revision_number.clone(),
+                batch_number: batch_number.clone(),
+                sub_units: sub_units.clone(),
+                status: "complete".to_string(),
+            };
+            if let Some(tx) = slot_txs.remove(slot_id) {
+                let _ = tx.send(auto_unit_info);
+            }
+        }
+    } else {
+        // Interactive: create per-slot pending inputs and emit one request per slot
+        {
+            let mut pending_unit_inputs = orchestrator_state.pending_unit_inputs.lock().await;
+            let mut slot_map: HashMap<String, PendingUnitInput> = HashMap::new();
+            for (slot_id, tx) in slot_txs.drain() {
+                slot_map.insert(
+                    slot_id.clone(),
+                    PendingUnitInput {
+                        sender: tx,
+                        unit_config: procedure_def.unit.clone(),
+                    },
+                );
+            }
+            pending_unit_inputs.insert(execution_id_str.clone(), slot_map);
+        }
+
+        for slot_id in &slots {
+            let _ = UnitInputRequestEvent {
+                execution_id: execution_id_str.clone(),
+                slot_id: slot_id.clone(),
+                unit_config: procedure_def.unit.clone(),
+            }
+            .emit(&app_handle);
+        }
     }
-    .emit(&app_handle);
 
     // Emit initialization status: initializing
     let _ = InitializationStatusEvent {
@@ -275,34 +402,54 @@ pub async fn execute_parallel_runs(
         );
     }
 
-    // === WAIT FOR UNIT INPUT (with cancellation checks) ===
-    let orchestrator_state_for_cancel = (*orchestrator_state).clone();
-    let execution_id_for_cancel = execution_id_str.clone();
-
-    let unit_info_result = tokio::select! {
-        result = tokio::time::timeout(std::time::Duration::from_secs(300), unit_input_rx) => {
-            result
-                .map_err(|_| "Unit input timeout: no serial number received within 5 minutes".to_string())
-                .and_then(|r| r.map_err(|_| "Unit input channel closed before receiving serial number".to_string()))
-        }
-        _ = async {
-            loop {
-                // Check if cancelled via stop/kill
-                let pending = orchestrator_state_for_cancel.pending_unit_inputs.lock().await;
-                if !pending.contains_key(&execution_id_for_cancel) {
-                    break;
-                }
-                drop(pending);
-                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    // === WAIT FOR UNIT INPUT (with cancellation checks, per slot) ===
+    // For auto_identify / prefill the channels are already filled, so receive directly.
+    // For interactive: each slot's channel completes when submit_unit_input sends to it,
+    // or errors if the entry is dropped (stop/kill removes the outer map entry, dropping senders).
+    let channels_prefilled = prefill_units.is_some() || auto_identify;
+    let unit_infos_result: Result<HashMap<String, UnitInfo>, String> = if channels_prefilled {
+        // All channels already sent; collect them
+        let mut collected: HashMap<String, UnitInfo> = HashMap::new();
+        for (slot_id_key, rx) in slot_rxs {
+            match rx.await {
+                Ok(info) => { collected.insert(slot_id_key, info); }
+                Err(_) => return Err("Unit input channel closed before receiving unit info".to_string()),
             }
-        } => {
-            Err("Execution cancelled during unit identification".to_string())
+        }
+        Ok(collected)
+    } else {
+        // Await all slot receivers concurrently with a timeout.
+        // Cancellation: stop/kill removes the outer entry, dropping the senders, which causes
+        // receivers to return Err. We distinguish success (Ok) from cancellation (Err).
+        let slot_ids: Vec<String> = slot_rxs.keys().cloned().collect();
+        let receivers: Vec<tokio::sync::oneshot::Receiver<UnitInfo>> =
+            slot_ids.iter().map(|k| slot_rxs.remove(k).unwrap()).collect();
+
+        let collect_all = futures::future::join_all(receivers.into_iter().map(|rx| rx));
+
+        match tokio::time::timeout(std::time::Duration::from_secs(300), collect_all).await {
+            Err(_) => Err("Unit input timeout: no serial number received within 5 minutes".to_string()),
+            Ok(slot_results) => {
+                let mut collected: HashMap<String, UnitInfo> = HashMap::new();
+                let mut was_cancelled = false;
+                for (sid, result) in slot_ids.iter().zip(slot_results.into_iter()) {
+                    match result {
+                        Ok(info) => { collected.insert(sid.clone(), info); }
+                        Err(_) => { was_cancelled = true; }
+                    }
+                }
+                if was_cancelled {
+                    Err("Execution cancelled during unit identification".to_string())
+                } else {
+                    Ok(collected)
+                }
+            }
         }
     };
 
     // Handle unit input result
-    let unit_info = match unit_info_result {
-        Ok(info) => info,
+    let unit_infos = match unit_infos_result {
+        Ok(infos) => infos,
         Err(e) => {
             log::debug!("Unit input cancelled or failed: {}", e);
 
@@ -336,8 +483,8 @@ pub async fn execute_parallel_runs(
     };
 
     log::trace!(
-        "Received unit serial number: {}",
-        unit_info.serial_number.as_deref().unwrap_or("none")
+        "Received unit infos for {} slots",
+        unit_infos.len()
     );
 
     // === WAIT FOR INITIALIZATION TO COMPLETE ===
@@ -461,11 +608,11 @@ pub async fn execute_parallel_runs(
     // === SETUP PROCEDURE AND START EXECUTION ===
     {
         let mut orchestrator = orchestrator_arc.lock().await;
-        orchestrator.set_initial_unit_info(unit_info.clone());
+        orchestrator.set_initial_unit_infos(unit_infos.clone());
 
-        // Initialize report managers AFTER we have unit info
+        // Initialize report managers AFTER we have unit infos
         if let Err(e) = orchestrator
-            .initialize_report_managers(&procedure_file_buf, &slots)
+            .initialize_report_managers(&procedure_file_buf, &slots, &unit_infos)
             .await
         {
             log::trace!(
@@ -492,9 +639,9 @@ pub async fn execute_parallel_runs(
             procedure_def.execution.as_ref().map(|e| e.strategy).unwrap_or(ExecutionStrategy::PhaseFirst)
         };
 
-        // Submit procedure with determined execution strategy and initial unit info
+        // Submit procedure with determined execution strategy and per-slot unit infos
         orchestrator
-            .submit_procedure(slots, exec_strategy, unit_info)
+            .submit_procedure(slots, exec_strategy, unit_infos)
             .await
             .map_err(|e| format!("Failed to submit procedure: {}", e))?;
     }
@@ -790,17 +937,28 @@ pub async fn stop_execution(
 #[specta::specta]
 pub async fn submit_unit_input(
     execution_id: String,
+    slot_id: String,
     unit_data: HashMap<String, String>,
     orchestrator_state: State<'_, OrchestratorState>,
 ) -> Result<(), String> {
     log::trace!(
-        "Submitting unit info for execution '{}': {:?}",
-        execution_id, unit_data
+        "Submitting unit info for execution '{}' slot '{}': {:?}",
+        execution_id, slot_id, unit_data
     );
 
     let pending_input = {
         let mut pending = orchestrator_state.pending_unit_inputs.lock().await;
-        pending.remove(&execution_id)
+        if let Some(slot_map) = pending.get_mut(&execution_id) {
+            let input = slot_map.remove(&slot_id);
+            // If the inner map is now empty, remove the outer entry too
+            // (all slots submitted — the wait loop will see the key gone and unblock)
+            if slot_map.is_empty() {
+                pending.remove(&execution_id);
+            }
+            input
+        } else {
+            None
+        }
     };
 
     if let Some(pending_input) = pending_input {
@@ -842,8 +1000,8 @@ pub async fn submit_unit_input(
         Ok(())
     } else {
         Err(format!(
-            "No pending unit input request for execution '{}': may have already been submitted or timed out",
-            execution_id
+            "No pending unit input request for execution '{}' slot '{}': may have already been submitted or timed out",
+            execution_id, slot_id
         ))
     }
 }

@@ -107,6 +107,7 @@ pub fn run() {
             execution::events::PlugLogEvent,
             execution::events::UiUpdateEvent,
             execution::commands::UnitInputRequestEvent,
+            execution::commands::UnitInputAutoEvent,
             execution::commands::InitializationStatusEvent,
             execution::commands::ExecutionProgressEvent,
             execution::commands::ExecutionCompleteEventPayload,

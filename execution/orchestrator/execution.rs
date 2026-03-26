@@ -56,7 +56,10 @@ impl Orchestrator {
                             phase_results.insert(info.phase_key.clone(), json);
                         }
 
-                        if result.unit.is_some() {
+                        // Only collect unit info from slot-specific phases.
+                        // Shared phases carry an arbitrary slot's initial unit info
+                        // which would incorrectly overwrite this slot's data.
+                        if result.unit.is_some() && info.slot_id.is_some() {
                             results_with_unit.push(result);
                         }
                     }
@@ -67,7 +70,13 @@ impl Orchestrator {
             // Merge completed phases' unit info on top of initial_unit_info
             // Same logic as reports/mod.rs finalize_report: only update fields that
             // differ from the initial value (so phases can't accidentally reset fields)
-            let initial = &self.initial_unit_info;
+            let initial = if let Some(slot_id) = &job.slot_id {
+                self.initial_unit_infos.get(slot_id.as_str())
+                    .or_else(|| self.initial_unit_infos.values().next())
+                    .cloned()
+            } else {
+                self.initial_unit_infos.values().next().cloned()
+            };
             let mut merged = initial.clone();
 
             if !results_with_unit.is_empty() {

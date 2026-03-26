@@ -531,6 +531,7 @@ mod tests {
             status: "tested".to_string(),
         };
         let config = Some(crate::procedure::UnitConfig {
+            auto_identify: false,
             serial_number: Some(UnitFieldConfig::default()),
             part_number: Some(UnitFieldConfig::default()),
             revision_number: None,
@@ -556,6 +557,7 @@ mod tests {
             status: "tested".to_string(),
         };
         let config = Some(crate::procedure::UnitConfig {
+            auto_identify: false,
             serial_number: Some(UnitFieldConfig::default()),
             part_number: Some(UnitFieldConfig::default()),
             revision_number: None,
@@ -580,6 +582,7 @@ mod tests {
             status: "tested".to_string(),
         };
         let config = Some(crate::procedure::UnitConfig {
+            auto_identify: false,
             serial_number: Some(UnitFieldConfig::default()),
             part_number: Some(UnitFieldConfig::default()),
             revision_number: None,

@@ -160,7 +160,7 @@ pub struct Orchestrator {
     pub(super) app_handle: Option<tauri::AppHandle>,
     pub(super) start_time: Option<chrono::DateTime<chrono::Utc>>,
     pub(super) end_time: Option<chrono::DateTime<chrono::Utc>>,
-    pub(super) initial_unit_info: Option<crate::execution::types::UnitInfo>,
+    pub(super) initial_unit_infos: HashMap<String, crate::execution::types::UnitInfo>,
 }
 
 pub struct JobStatusResolver;
@@ -242,12 +242,12 @@ impl Orchestrator {
             app_handle: None,
             start_time: None,
             end_time: None,
-            initial_unit_info: None,
+            initial_unit_infos: HashMap::new(),
         }
     }
 
-    pub fn set_initial_unit_info(&mut self, unit_info: crate::execution::types::UnitInfo) {
-        self.initial_unit_info = Some(unit_info);
+    pub fn set_initial_unit_infos(&mut self, unit_infos: HashMap<String, crate::execution::types::UnitInfo>) {
+        self.initial_unit_infos = unit_infos;
     }
 
     pub fn set_app_handle(&mut self, app_handle: tauri::AppHandle) {
