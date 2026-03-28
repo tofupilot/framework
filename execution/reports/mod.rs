@@ -54,7 +54,7 @@ pub struct Phase {
     pub logs: Vec<LogEntry>,
     pub error: Option<String>,
     pub attachments: Vec<String>,
-    pub repeat_count: u32,
+    pub retry_count: u32,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -428,7 +428,7 @@ impl ReportManager {
             logs: result.logs.clone(),
             error,
             attachments,
-            repeat_count: result.retry_count as u32,
+            retry_count: result.retry_count as u32,
         })
     }
 
