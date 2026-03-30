@@ -207,6 +207,7 @@ impl OrchestratorState {
                 completed_at: chrono::Utc::now(),
                 resource_metrics: None,
                 unit: None,
+                input_unit_info: None,
                 retry_count: job.retry_count,
             };
             // Populate job_info so cancelled jobs appear in the report
@@ -262,6 +263,7 @@ impl OrchestratorState {
                 completed_at: chrono::Utc::now(),
                 resource_metrics: None,
                 unit: None,
+                input_unit_info: None,
                 retry_count: job.retry_count,
             };
             // Populate job_info so cancelled jobs appear in the report

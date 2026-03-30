@@ -73,6 +73,7 @@ mod outcome_resolver_tests {
             completed_at: now,
             resource_metrics: None,
             unit: None,
+            input_unit_info: None,
             retry_count: 0,
         }
     }
@@ -389,6 +390,7 @@ mod next_action_tests {
             completed_at: now,
             resource_metrics: None,
             unit: None,
+            input_unit_info: None,
             retry_count: 0,
         }
     }
@@ -672,6 +674,7 @@ mod integration_tests {
             completed_at: now,
             resource_metrics: None,
             unit: None,
+            input_unit_info: None,
             retry_count: 0,
         }
     }

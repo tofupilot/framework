@@ -236,15 +236,9 @@ impl ReportManager {
             // Collect unit info by merging all job results' unit info
             // Start with initial_unit_info and merge in all phase unit infos
             // Key insight: only update a field if the phase actually changed it
-            // (i.e., the new value differs from the initial value)
+            // (i.e., the output value differs from what that phase received as input)
             let collected_unit_info = {
                 let mut merged = self.initial_unit_info.clone();
-                let initial = self.initial_unit_info.as_ref();
-                let initial_serial = initial.and_then(|u| u.serial_number.clone());
-                let initial_part = initial.and_then(|u| u.part_number.clone());
-                let initial_revision = initial.and_then(|u| u.revision_number.clone());
-                let initial_batch = initial.and_then(|u| u.batch_number.clone());
-                let initial_sub_units = initial.and_then(|u| u.sub_units.clone()).unwrap_or_default();
 
                 // Build phase declaration order map (setup → main → teardown)
                 let phase_declaration_order: HashMap<String, usize> = self.procedure_def
@@ -259,20 +253,38 @@ impl ReportManager {
                     })
                     .unwrap_or_default();
 
-                // Collect slot-specific job results with unit info, sorted by declaration order.
+                // Collect slot-specific job results with unit info, keeping only the
+                // highest retry_count per phase_key (final attempt wins).
                 // Shared phases (slot_id = None) are excluded: their unit info comes from an
                 // arbitrary slot's initial values and would incorrectly overwrite this slot's data.
-                let mut job_results_with_unit: Vec<_> = job_results
-                    .iter()
-                    .filter(|(id, r)| {
-                        r.unit.is_some()
-                            && job_info
-                                .get(id)
-                                .map(|info| info.slot_id.is_some())
-                                .unwrap_or(false)
-                    })
-                    .collect();
-                job_results_with_unit.sort_by(|(id_a, a), (id_b, b)| {
+                let mut best_by_phase: HashMap<String, (&uuid::Uuid, &JobResult)> = HashMap::new();
+                // Separately track the first attempt's input_unit_info per phase (lowest retry_count).
+                let mut first_input_by_phase: HashMap<String, (usize, Option<crate::execution::types::UnitInfo>)> = HashMap::new();
+                for (id, r) in job_results.iter() {
+                    if r.unit.is_none() {
+                        continue;
+                    }
+                    let info = match job_info.get(id) {
+                        Some(i) if i.slot_id.is_some() => i,
+                        _ => continue,
+                    };
+                    let prev_count = best_by_phase
+                        .get(&info.phase_key)
+                        .map(|(_, r)| r.retry_count)
+                        .unwrap_or(0);
+                    if r.retry_count >= prev_count {
+                        best_by_phase.insert(info.phase_key.clone(), (id, r));
+                    }
+                    let prev_min = first_input_by_phase
+                        .get(&info.phase_key)
+                        .map(|(c, _)| *c)
+                        .unwrap_or(usize::MAX);
+                    if r.retry_count <= prev_min {
+                        first_input_by_phase.insert(info.phase_key.clone(), (r.retry_count, r.input_unit_info.clone()));
+                    }
+                }
+                let mut job_results_with_unit: Vec<_> = best_by_phase.into_iter().collect();
+                job_results_with_unit.sort_by(|(_key_a, (id_a, a)), (_key_b, (id_b, b))| {
                     let pos_a = job_info.get(id_a)
                         .and_then(|i| phase_declaration_order.get(&i.phase_key))
                         .copied()
@@ -284,16 +296,26 @@ impl ReportManager {
                     pos_a.cmp(&pos_b).then(a.started_at.cmp(&b.started_at))
                 });
 
-                for (_, result) in job_results_with_unit {
+                for (phase_key, (_, result)) in job_results_with_unit {
                     if let Some(phase_unit) = &result.unit {
+                        // Compare against the FIRST attempt's input, not the final retry's input.
+                        // This ensures that when a retry sets the same value as a previous attempt,
+                        // it's still detected as a change relative to what the phase originally received.
+                        let first_input = first_input_by_phase.get(&phase_key).and_then(|(_, inp)| inp.as_ref());
+                        let input = first_input.or(result.input_unit_info.as_ref());
+                        let input_serial = input.and_then(|u| u.serial_number.clone());
+                        let input_part = input.and_then(|u| u.part_number.clone());
+                        let input_revision = input.and_then(|u| u.revision_number.clone());
+                        let input_batch = input.and_then(|u| u.batch_number.clone());
+                        let input_sub_units = input.and_then(|u| u.sub_units.clone()).unwrap_or_default();
+
                         merged = Some(match merged {
                             Some(base) => {
                                 // Merge sub_units maps, but only if the phase actually changed the value
                                 let merged_sub_units = match (base.sub_units, phase_unit.sub_units.clone()) {
                                     (Some(mut base_subs), Some(phase_subs)) => {
                                         for (key, value) in phase_subs {
-                                            let initial_value = initial_sub_units.get(&key);
-                                            if initial_value != Some(&value) {
+                                            if input_sub_units.get(&key) != Some(&value) {
                                                 base_subs.insert(key, value);
                                             }
                                         }
@@ -303,26 +325,26 @@ impl ReportManager {
                                     (None, Some(phase_subs)) => {
                                         let filtered: HashMap<String, String> = phase_subs
                                             .into_iter()
-                                            .filter(|(k, v)| initial_sub_units.get(k) != Some(v))
+                                            .filter(|(k, v)| input_sub_units.get(k) != Some(v))
                                             .collect();
                                         if filtered.is_empty() { None } else { Some(filtered) }
                                     }
                                     (None, None) => None,
                                 };
 
-                                // Helper: only update if phase value differs from initial
-                                let merge_field = |phase_val: &Option<String>, base_val: Option<String>, initial_val: &Option<String>| -> Option<String> {
+                                // Helper: only update if phase value differs from what it received
+                                let merge_field = |phase_val: &Option<String>, base_val: Option<String>, input_val: &Option<String>| -> Option<String> {
                                     match phase_val {
-                                        Some(v) if phase_val != initial_val => Some(v.clone()),
+                                        Some(v) if phase_val != input_val => Some(v.clone()),
                                         _ => base_val,
                                     }
                                 };
 
                                 crate::execution::types::UnitInfo {
-                                    serial_number: merge_field(&phase_unit.serial_number, base.serial_number, &initial_serial),
-                                    part_number: merge_field(&phase_unit.part_number, base.part_number, &initial_part),
-                                    revision_number: merge_field(&phase_unit.revision_number, base.revision_number, &initial_revision),
-                                    batch_number: merge_field(&phase_unit.batch_number, base.batch_number, &initial_batch),
+                                    serial_number: merge_field(&phase_unit.serial_number, base.serial_number, &input_serial),
+                                    part_number: merge_field(&phase_unit.part_number, base.part_number, &input_part),
+                                    revision_number: merge_field(&phase_unit.revision_number, base.revision_number, &input_revision),
+                                    batch_number: merge_field(&phase_unit.batch_number, base.batch_number, &input_batch),
                                     sub_units: merged_sub_units,
                                     status: phase_unit.status.clone(),
                                 }

@@ -645,6 +645,7 @@ impl Worker {
             completed_at: end_time,
             resource_metrics: Default::default(),
             unit,
+            input_unit_info: job.initial_unit_info.clone(),
             retry_count: job.retry_count,
         })
     }
@@ -844,6 +845,7 @@ impl Worker {
             completed_at: end_time,
             resource_metrics,
             unit: None,
+            input_unit_info: job.initial_unit_info.clone(),
             retry_count: job.retry_count,
         })
     }
@@ -980,6 +982,7 @@ impl Worker {
             completed_at: end_time,
             resource_metrics,
             unit: unit_info,
+            input_unit_info: job.initial_unit_info.clone(),
             retry_count: job.retry_count,
         })
     }

@@ -197,6 +197,9 @@ pub struct JobResult {
     pub completed_at: chrono::DateTime<chrono::Utc>,
     pub resource_metrics: Option<ResourceMetrics>,
     pub unit: Option<crate::execution::types::UnitInfo>,
+    /// The unit info that was passed to this job before execution.
+    /// Used to distinguish intentional changes from inherited values during merge.
+    pub input_unit_info: Option<crate::execution::types::UnitInfo>,
     pub retry_count: usize,
 }
 
@@ -216,6 +219,7 @@ impl JobResult {
             completed_at: now,
             resource_metrics: None,
             unit: None,
+            input_unit_info: None,
             retry_count: 0,
         }
     }
@@ -235,6 +239,7 @@ impl JobResult {
             completed_at: now,
             resource_metrics: None,
             unit: None,
+            input_unit_info: None,
             retry_count: 0,
         }
     }
@@ -254,6 +259,7 @@ impl JobResult {
             completed_at: now,
             resource_metrics: None,
             unit: None,
+            input_unit_info: None,
             retry_count: 0,
         }
     }

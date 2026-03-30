@@ -32,14 +32,53 @@ impl Orchestrator {
             let state = self.state.read().await;
             let mut phase_results: std::collections::HashMap<String, String> =
                 std::collections::HashMap::new();
+            // Track highest retry_count per phase_key so only the final attempt wins
+            let mut phase_retry_counts: std::collections::HashMap<String, usize> =
+                std::collections::HashMap::new();
 
-            // Collect completed job results relevant to this slot for unit info merging
-            let mut results_with_unit: Vec<&crate::execution::job::JobResult> = Vec::new();
+            // Collect completed job results relevant to this slot for unit info merging.
+            // Keyed by phase_key — keeps only the highest retry_count per phase.
+            let mut unit_results_by_phase: std::collections::HashMap<String, &crate::execution::job::JobResult> =
+                std::collections::HashMap::new();
+            // Separately track the first attempt's input_unit_info per phase (lowest retry_count).
+            // Used as the diff baseline so retries that set the same value as a prior attempt
+            // are still detected as intentional changes.
+            let mut first_input_by_phase: std::collections::HashMap<String, (usize, Option<crate::execution::types::UnitInfo>)> =
+                std::collections::HashMap::new();
 
             for (job_id, info) in &state.job_info {
                 // Include results from same slot or shared phases
                 if info.slot_id == job.slot_id || info.slot_id.is_none() {
                     if let Some(result) = state.job_results.get(job_id) {
+                        // Only collect unit info from slot-specific phases.
+                        // Shared phases carry an arbitrary slot's initial unit info
+                        // which would incorrectly overwrite this slot's data.
+                        if result.unit.is_some() && info.slot_id.is_some() {
+                            let prev_count = unit_results_by_phase
+                                .get(&info.phase_key)
+                                .map(|r| r.retry_count)
+                                .unwrap_or(0);
+                            if result.retry_count >= prev_count {
+                                unit_results_by_phase.insert(info.phase_key.clone(), result);
+                            }
+                            let prev_min = first_input_by_phase
+                                .get(&info.phase_key)
+                                .map(|(c, _)| *c)
+                                .unwrap_or(usize::MAX);
+                            if result.retry_count <= prev_min {
+                                first_input_by_phase.insert(info.phase_key.clone(), (result.retry_count, result.input_unit_info.clone()));
+                            }
+                        }
+
+                        // Only keep the result with the highest retry_count for each phase_key.
+                        // HashMap iteration is unordered, so without this check an earlier
+                        // failed attempt can overwrite the final successful one.
+                        let prev = phase_retry_counts.get(&info.phase_key).copied();
+                        if prev.is_some() && result.retry_count < prev.unwrap() {
+                            continue;
+                        }
+                        phase_retry_counts.insert(info.phase_key.clone(), result.retry_count);
+
                         let mut data: serde_json::Map<String, serde_json::Value> = result
                             .measurements
                             .iter()
@@ -54,13 +93,6 @@ impl Orchestrator {
                         data.insert("duration_ms".to_string(), serde_json::json!(duration_ms));
                         if let Ok(json) = serde_json::to_string(&data) {
                             phase_results.insert(info.phase_key.clone(), json);
-                        }
-
-                        // Only collect unit info from slot-specific phases.
-                        // Shared phases carry an arbitrary slot's initial unit info
-                        // which would incorrectly overwrite this slot's data.
-                        if result.unit.is_some() && info.slot_id.is_some() {
-                            results_with_unit.push(result);
                         }
                     }
                 }
@@ -79,23 +111,30 @@ impl Orchestrator {
             };
             let mut merged = initial.clone();
 
-            if !results_with_unit.is_empty() {
-                let initial_serial = initial.as_ref().and_then(|u| u.serial_number.clone());
-                let initial_part = initial.as_ref().and_then(|u| u.part_number.clone());
-                let initial_revision = initial.as_ref().and_then(|u| u.revision_number.clone());
-                let initial_batch = initial.as_ref().and_then(|u| u.batch_number.clone());
-                let initial_sub_units = initial.as_ref().and_then(|u| u.sub_units.clone()).unwrap_or_default();
+            if !unit_results_by_phase.is_empty() {
+                let mut results_with_unit: Vec<(String, &crate::execution::job::JobResult)> =
+                    unit_results_by_phase.into_iter().collect();
+                results_with_unit.sort_by_key(|(_, r)| r.started_at);
 
-                results_with_unit.sort_by_key(|r| r.started_at);
-
-                for result in results_with_unit {
+                for (phase_key, result) in results_with_unit {
                     if let Some(phase_unit) = &result.unit {
+                        // Compare against the FIRST attempt's input, not the final retry's input.
+                        // This ensures that when a retry sets the same value as a previous attempt,
+                        // it's still detected as a change relative to what the phase originally received.
+                        let first_input = first_input_by_phase.get(&phase_key).and_then(|(_, inp)| inp.as_ref());
+                        let input = first_input.or(result.input_unit_info.as_ref());
+                        let input_serial = input.and_then(|u| u.serial_number.clone());
+                        let input_part = input.and_then(|u| u.part_number.clone());
+                        let input_revision = input.and_then(|u| u.revision_number.clone());
+                        let input_batch = input.and_then(|u| u.batch_number.clone());
+                        let input_sub_units = input.and_then(|u| u.sub_units.clone()).unwrap_or_default();
+
                         merged = Some(match merged {
                             Some(base) => {
                                 let merged_sub_units = match (base.sub_units, phase_unit.sub_units.clone()) {
                                     (Some(mut base_subs), Some(phase_subs)) => {
                                         for (key, value) in phase_subs {
-                                            if initial_sub_units.get(&key) != Some(&value) {
+                                            if input_sub_units.get(&key) != Some(&value) {
                                                 base_subs.insert(key, value);
                                             }
                                         }
@@ -105,25 +144,25 @@ impl Orchestrator {
                                     (None, Some(phase_subs)) => {
                                         let filtered: std::collections::HashMap<String, String> = phase_subs
                                             .into_iter()
-                                            .filter(|(k, v)| initial_sub_units.get(k) != Some(v))
+                                            .filter(|(k, v)| input_sub_units.get(k) != Some(v))
                                             .collect();
                                         if filtered.is_empty() { None } else { Some(filtered) }
                                     }
                                     (None, None) => None,
                                 };
 
-                                let merge_field = |phase_val: &Option<String>, base_val: Option<String>, initial_val: &Option<String>| -> Option<String> {
+                                let merge_field = |phase_val: &Option<String>, base_val: Option<String>, input_val: &Option<String>| -> Option<String> {
                                     match phase_val {
-                                        Some(v) if phase_val != initial_val => Some(v.clone()),
+                                        Some(v) if phase_val != input_val => Some(v.clone()),
                                         _ => base_val,
                                     }
                                 };
 
                                 crate::execution::types::UnitInfo {
-                                    serial_number: merge_field(&phase_unit.serial_number, base.serial_number, &initial_serial),
-                                    part_number: merge_field(&phase_unit.part_number, base.part_number, &initial_part),
-                                    revision_number: merge_field(&phase_unit.revision_number, base.revision_number, &initial_revision),
-                                    batch_number: merge_field(&phase_unit.batch_number, base.batch_number, &initial_batch),
+                                    serial_number: merge_field(&phase_unit.serial_number, base.serial_number, &input_serial),
+                                    part_number: merge_field(&phase_unit.part_number, base.part_number, &input_part),
+                                    revision_number: merge_field(&phase_unit.revision_number, base.revision_number, &input_revision),
+                                    batch_number: merge_field(&phase_unit.batch_number, base.batch_number, &input_batch),
                                     sub_units: merged_sub_units,
                                     status: phase_unit.status.clone(),
                                 }
@@ -142,14 +181,22 @@ impl Orchestrator {
             let state = self.state.read().await;
             let mut phase_results: std::collections::HashMap<String, String> =
                 std::collections::HashMap::new();
+            // Track highest retry_count per phase_key so only the final attempt wins
+            let mut phase_retry_counts: std::collections::HashMap<String, usize> =
+                std::collections::HashMap::new();
             for (job_id, info) in &state.job_info {
                 // Include results from same slot or shared phases
                 if info.slot_id == job.slot_id || info.slot_id.is_none() {
                     if let Some(result) = state.job_results.get(job_id) {
-                        // Skip intermediate retry attempts — only use the final attempt's results
-                        if result.phase_outcome == crate::execution::job::Outcome::Retry {
+                        // Only keep the result with the highest retry_count for each phase_key.
+                        // The previous Outcome::Retry filter missed cases where a failed
+                        // measurement validation (Outcome::Fail) triggered a retry.
+                        let prev = phase_retry_counts.get(&info.phase_key).copied();
+                        if prev.is_some() && result.retry_count < prev.unwrap() {
                             continue;
                         }
+                        phase_retry_counts.insert(info.phase_key.clone(), result.retry_count);
+
                         let mut data: serde_json::Map<String, serde_json::Value> = result
                             .measurements
                             .iter()
