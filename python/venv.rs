@@ -10,7 +10,7 @@ use tauri_plugin_shell::ShellExt;
 use tauri_specta::Event;
 use toml_edit::{DocumentMut, Item, Table};
 
-const STUDIO_DEPENDENCIES: &[&str] = &["grpcio>=1.76.0", "portpicker", "protobuf"];
+const STUDIO_DEPENDENCIES: &[&str] = &[];
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type, tauri_specta::Event)]
 pub struct PythonInstallOutputEvent(pub String);

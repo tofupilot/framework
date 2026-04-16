@@ -3,19 +3,36 @@
 
 use crate::execution::log::LogEntry;
 use crate::execution::events::PlugLogEvent;
-use crate::plugs::grpc::plug_service_client::PlugServiceClient;
-use crate::grpc_process::GrpcProcess;
+use crate::child_process::ChildProcess;
+use execution_engine::protocol::{PlugRequest, PlugResponse};
+use execution_engine::transport;
 use serde_json;
-use tonic::transport::Channel;
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use tauri::Manager;
 use tauri_specta::Event;
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::io::BufReader;
+use tokio::io::AsyncBufReadExt;
+use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 
-pub type PlugService = GrpcProcess<PlugServiceClient<Channel>>;
+pub type PlugService = ChildProcess;
+
+/// Send a plug request and read a response over a fresh TCP connection.
+async fn plug_rpc(port: u16, request: &PlugRequest) -> Result<PlugResponse, String> {
+    let stream = TcpStream::connect(format!("127.0.0.1:{}", port))
+        .await
+        .map_err(|e| format!("TCP connect to plug failed: {}", e))?;
+
+    let (read_half, mut write_half) = tokio::io::split(stream);
+    let mut reader = BufReader::new(read_half);
+
+    transport::write_json_line(&mut write_half, request).await?;
+    transport::read_json_line::<PlugResponse>(&mut reader)
+        .await?
+        .ok_or_else(|| "Plug closed connection without response".to_string())
+}
 
 /// Manager for individual plug service processes
 #[derive(Debug)]
@@ -23,7 +40,7 @@ pub struct PlugServiceManager {
     services: Mutex<HashMap<String, PlugService>>,
     project_dir: PathBuf,
     used_ports: Mutex<HashSet<u16>>,
-    id: String, // Unique ID for debugging
+    id: String,
 }
 
 impl PlugServiceManager {
@@ -39,31 +56,27 @@ impl PlugServiceManager {
     }
 
     async fn wait_for_plug_ready(
-        client: &PlugServiceClient<Channel>,
+        port: u16,
         plug_name: &str,
         timeout_secs: u64,
     ) -> Result<(), String> {
-        use crate::plugs::grpc::StatusRequest;
-
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
         let poll_interval = std::time::Duration::from_millis(100);
 
         loop {
-            let mut client = client.clone();
-            match client.get_status(StatusRequest {}).await {
+            match plug_rpc(port, &PlugRequest::GetStatus).await {
                 Ok(response) => {
-                    let status = response.into_inner();
-                    if status.success {
+                    if response.success {
                         return Ok(());
                     }
-                    if let Some(ref err) = status.error {
+                    if let Some(ref err) = response.error {
                         if !err.contains("initializing") {
                             return Err(err.clone());
                         }
                     }
                 }
                 Err(e) => {
-                    log::warn!("GetStatus RPC failed for {}: {}", plug_name, e);
+                    log::warn!("GetStatus failed for {}: {}", plug_name, e);
                 }
             }
 
@@ -78,7 +91,7 @@ impl PlugServiceManager {
         }
     }
 
-    fn find_plug_script_cli() -> Result<PathBuf, String> {
+    fn find_plug_script_cli() -> Result<std::path::PathBuf, String> {
         let exe_path = std::env::current_exe()
             .map_err(|e| format!("Failed to get current executable path: {}", e))?;
         let exe_dir = exe_path
@@ -162,7 +175,7 @@ impl PlugServiceManager {
         let slot_id_clone = slot_id.clone();
         let app_handle_opt = app_handle.cloned();
 
-        let mut service = GrpcProcess::spawn(
+        let mut service = ChildProcess::spawn(
             &python_path,
             python_script,
             vec![
@@ -179,7 +192,7 @@ impl PlugServiceManager {
             vec![],
             Some(Box::new(move |stderr| {
                 tokio::spawn(async move {
-                    let reader = BufReader::new(stderr);
+                    let reader = tokio::io::BufReader::new(stderr);
                     let mut lines = reader.lines();
                     while let Ok(Some(line)) = lines.next_line().await {
                         if let Ok(log_entry) = serde_json::from_str::<LogEntry>(&line) {
@@ -220,16 +233,12 @@ impl PlugServiceManager {
                     }
                 });
             })),
-            |port| async move {
-                let channel = crate::grpc_process::connect_grpc_channel(port).await?;
-                Ok(PlugServiceClient::new(channel))
-            },
         )
         .await?;
 
         let port = service.port;
 
-        if let Err(e) = Self::wait_for_plug_ready(&service.client, &instance_key, 30).await {
+        if let Err(e) = Self::wait_for_plug_ready(port, &instance_key, 30).await {
             log::error!("Plug '{}' initialization failed: {}", instance_key, e);
             service.force_kill().await.ok();
             return Err(e);
@@ -259,8 +268,6 @@ impl PlugServiceManager {
 
     /// Stop a specific plug service with proper teardown
     pub async fn stop_plug_service(&self, plug_name: &str) -> Result<(), String> {
-        use crate::plugs::grpc::{CleanupRequest, ShutdownRequest};
-
         let mut services = self.services.lock().await;
         log::debug!(
             "stop_plug_service called for {} (Manager ID: {}), current services: {:?}",
@@ -274,18 +281,16 @@ impl PlugServiceManager {
             log::info!("Stopping plug service {} on port {}", plug_name, port);
             drop(services);
 
-            let mut client = service.client.clone();
-
             let result = service.graceful_shutdown(
                 || async move {
                     let _ = tokio::time::timeout(
                         tokio::time::Duration::from_secs(5),
-                        client.cleanup(CleanupRequest {})
+                        plug_rpc(port, &PlugRequest::Cleanup)
                     ).await;
 
                     let _ = tokio::time::timeout(
                         tokio::time::Duration::from_secs(1),
-                        client.shutdown(ShutdownRequest {})
+                        plug_rpc(port, &PlugRequest::Shutdown)
                     ).await;
 
                     Ok(())
@@ -303,8 +308,6 @@ impl PlugServiceManager {
         }
     }
 
-    /// Force kill a plug service immediately without graceful teardown
-    /// Returns the port that was released
     pub async fn force_kill_plug_service(&self, plug_name: &str) -> Result<u16, String> {
         let service = {
             let mut services = self.services.lock().await;
@@ -315,7 +318,7 @@ impl PlugServiceManager {
             let port = service.port;
 
             log::warn!(
-                "WARNING:  Force killing plug service {} process group",
+                "WARNING: Force killing plug service {} process group",
                 plug_name
             );
 
@@ -331,7 +334,6 @@ impl PlugServiceManager {
         }
     }
 
-    /// Force kill all plug services without graceful teardown
     pub async fn force_kill_all_services(&self) -> Result<(), String> {
         let plug_names: Vec<String> = {
             let services = self.services.lock().await;
@@ -341,10 +343,7 @@ impl PlugServiceManager {
         let service_count = plug_names.len();
 
         if service_count == 0 {
-            log::debug!(
-                "No plug services to force kill (Manager ID: {})",
-                self.id
-            );
+            log::debug!("No plug services to force kill (Manager ID: {})", self.id);
             return Ok(());
         }
 
@@ -358,18 +357,13 @@ impl PlugServiceManager {
         }
 
         if !failures.is_empty() {
-            log::warn!(
-                "Some plug services failed to stop: {:?}",
-                failures
-            );
+            log::warn!("Some plug services failed to stop: {:?}", failures);
         }
 
         log::info!("Force killed {} plug services", service_count);
-
         Ok(())
     }
 
-    /// Stop all plug services with proper teardown
     pub async fn stop_all_services(&self) -> Result<(), String> {
         let plug_names: Vec<String> = {
             let services = self.services.lock().await;
@@ -379,10 +373,7 @@ impl PlugServiceManager {
         let service_count = plug_names.len();
 
         if service_count == 0 {
-            log::debug!(
-                "No plug services to stop (Manager ID: {})",
-                self.id
-            );
+            log::debug!("No plug services to stop (Manager ID: {})", self.id);
             return Ok(());
         }
 
@@ -390,10 +381,7 @@ impl PlugServiceManager {
 
         for plug_name in plug_names {
             if let Err(e) = self.stop_plug_service(&plug_name).await {
-                log::warn!(
-                    "Failed to stop plug service {}: {}",
-                    plug_name, e
-                );
+                log::warn!("Failed to stop plug service {}: {}", plug_name, e);
             }
         }
 
@@ -401,13 +389,11 @@ impl PlugServiceManager {
         Ok(())
     }
 
-    /// Get the port for a specific plug service
     pub async fn get_plug_port(&self, plug_name: &str) -> Option<u16> {
         let services = self.services.lock().await;
         services.get(plug_name).map(|service| service.port)
     }
 
-    /// List all running services
     pub async fn list_services(&self) -> Vec<String> {
         let services = self.services.lock().await;
         let service_names: Vec<String> = services.keys().cloned().collect();
@@ -427,7 +413,6 @@ impl Drop for PlugServiceManager {
             self.id
         );
 
-        // get_mut() is infallible with &mut self — no lock contention possible
         let services = self.services.get_mut();
         if !services.is_empty() {
             log::warn!(

@@ -169,7 +169,7 @@ pub fn run(procedure_path: PathBuf) {
     });
 
     // Drop the runtime before exiting so spawned tasks are cancelled
-    // and GrpcProcess Drop impls kill any remaining child processes.
+    // and ChildProcess Drop impls kill any remaining child processes.
     drop(runtime);
     std::process::exit(exit_code);
 }

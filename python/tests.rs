@@ -214,8 +214,7 @@ dependencies = ["requests"]
 
         let content = std::fs::read_to_string(&pyproject_path).unwrap();
         assert!(content.contains("[dependency-groups]"));
-        assert!(content.contains("studio"));
-        assert!(content.contains("grpcio"));
+        assert!(content.contains("studio = ["));
     }
 
     #[test]
@@ -259,8 +258,8 @@ studio = ["grpcio==1.62.0", "portpicker", "protobuf"]
         ensure_manifest_with_studio_deps(temp.path()).unwrap();
 
         let final_content = std::fs::read_to_string(&pyproject_path).unwrap();
-        assert!(final_content.contains("grpcio>=1.76.0"));
-        assert!(!final_content.contains("grpcio==1.62.0"));
+        // Studio deps are now empty, so old deps should be replaced with empty list
+        assert!(final_content.contains("studio = ["));
     }
 
     #[test]
@@ -282,7 +281,6 @@ dev = ["pytest", "ruff"]
         assert!(content.contains("dev = ["));
         assert!(content.contains("pytest"));
         assert!(content.contains("studio = ["));
-        assert!(content.contains("grpcio"));
     }
 
     #[test]
@@ -309,8 +307,7 @@ version = "0.1.0"
         ensure_manifest_with_studio_deps(temp.path()).unwrap();
 
         let content = std::fs::read_to_string(&pyproject_path).unwrap();
-        assert!(content.contains("grpcio>=1.76.0"));
-        assert!(content.contains("portpicker"));
-        assert!(content.contains("protobuf"));
+        // Studio no longer requires external Python dependencies
+        assert!(content.contains("studio = ["));
     }
 }

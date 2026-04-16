@@ -4,7 +4,6 @@ use std::process::Stdio;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::ChildStderr;
-use tonic::transport::Channel;
 
 #[cfg(unix)]
 use nix::sys::signal::{self, Signal};
@@ -29,27 +28,22 @@ fn kill_process_group(id: u32) {
     }
 }
 
+/// A managed child process that advertises an NDJSON TCP port on stdout.
 #[derive(Debug)]
-pub struct GrpcProcess<C> {
+pub struct ChildProcess {
     pub port: u16,
     pub process: AsyncGroupChild,
-    pub client: C,
 }
 
-impl<C> GrpcProcess<C> {
-    pub async fn spawn<F, Fut>(
+impl ChildProcess {
+    pub async fn spawn(
         python_path: &str,
         script_path: PathBuf,
         args: Vec<String>,
         working_dir: Option<&PathBuf>,
         env_vars: Vec<(String, String)>,
         stderr_handler: Option<Box<dyn FnOnce(ChildStderr) + Send>>,
-        client_factory: F,
-    ) -> Result<Self, String>
-    where
-        F: FnOnce(u16) -> Fut,
-        Fut: std::future::Future<Output = Result<C, String>>,
-    {
+    ) -> Result<Self, String> {
         let mut cmd = crate::execution::runtime::python::PythonCommandBuilder::new(python_path)
             .unbuffered()
             .with_stdio(Stdio::null(), Stdio::piped(), Stdio::piped())
@@ -69,7 +63,7 @@ impl<C> GrpcProcess<C> {
 
         let mut process = cmd
             .spawn()
-            .map_err(|e| format!("Failed to spawn gRPC process: {}", e))?;
+            .map_err(|e| format!("Failed to spawn process: {}", e))?;
 
         let kill_on_err = |mut p: AsyncGroupChild| {
             if let Some(id) = p.inner().id() {
@@ -81,13 +75,12 @@ impl<C> GrpcProcess<C> {
             Some(s) => s,
             None => {
                 kill_on_err(process);
-                return Err("Failed to get stdout from gRPC process".to_string());
+                return Err("Failed to get stdout from process".to_string());
             }
         };
 
         let mut stderr = process.inner().stderr.take();
 
-        // Spawn stderr reader before reading port
         if let Some(stderr_handle) = stderr.take() {
             if let Some(handler) = stderr_handler {
                 handler(stderr_handle);
@@ -98,51 +91,38 @@ impl<C> GrpcProcess<C> {
         let mut port_line = String::new();
         if let Err(e) = stdout_reader.read_line(&mut port_line).await {
             kill_on_err(process);
-            return Err(format!("Failed to read port from gRPC process: {}", e));
+            return Err(format!("Failed to read port from process: {}", e));
         }
 
         let port = match port_line
             .trim()
-            .strip_prefix("GRPC_PORT:")
+            .strip_prefix("NDJSON_PORT:")
             .and_then(|s| s.parse::<u16>().ok())
         {
             Some(p) => p,
             None => {
                 kill_on_err(process);
                 return Err(format!(
-                    "Invalid port line from gRPC process: {}\nPython worker may have crashed during startup.\nCheck logs above for Python errors.",
+                    "Invalid port line from process: {}\nPython worker may have crashed during startup.\nCheck logs above for Python errors.",
                     port_line.trim()
                 ));
             }
         };
 
-        let client = match client_factory(port).await {
-            Ok(c) => c,
-            Err(e) => {
-                kill_on_err(process);
-                return Err(e);
-            }
-        };
-
-        Ok(Self {
-            port,
-            process,
-            client,
-        })
+        Ok(Self { port, process })
     }
 
-    /// Graceful shutdown - sends RPC, polls for exit, kills if needed
-    /// Takes &mut self so caller retains ownership for fallback force_kill
-    pub async fn graceful_shutdown<F, Fut>(
+    /// Graceful shutdown by sending SIGTERM, poll for exit, kill if needed.
+    pub async fn graceful_shutdown_signal(
         &mut self,
-        shutdown_rpc: F,
         timeout_secs: u64,
-    ) -> Result<(), String>
-    where
-        F: FnOnce() -> Fut,
-        Fut: std::future::Future<Output = Result<(), String>>,
-    {
-        shutdown_rpc().await.ok();
+    ) -> Result<(), String> {
+        #[cfg(unix)]
+        if let Some(id) = self.process.inner().id() {
+            if let Ok(pid) = i32::try_from(id) {
+                let _ = signal::kill(Pid::from_raw(-pid), Signal::SIGTERM);
+            }
+        }
 
         let max_wait = Duration::from_secs(timeout_secs);
         let poll_interval = Duration::from_millis(100);
@@ -165,7 +145,7 @@ impl<C> GrpcProcess<C> {
         }
 
         log::warn!(
-            "gRPC process did not exit after {:.1}s, killing process group",
+            "Process did not exit after {:.1}s, killing process group",
             max_wait.as_secs_f32()
         );
 
@@ -173,7 +153,55 @@ impl<C> GrpcProcess<C> {
             log::error!("Failed to kill process group: {}", e);
         }
 
-        // Wait for process to be fully reaped instead of sleeping
+        let _ = tokio::time::timeout(
+            Duration::from_millis(500),
+            self.process.wait()
+        ).await;
+
+        Ok(())
+    }
+
+    /// Graceful shutdown with a custom shutdown function, then poll/kill.
+    pub async fn graceful_shutdown<F, Fut>(
+        &mut self,
+        shutdown_fn: F,
+        timeout_secs: u64,
+    ) -> Result<(), String>
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = Result<(), String>>,
+    {
+        shutdown_fn().await.ok();
+
+        let max_wait = Duration::from_secs(timeout_secs);
+        let poll_interval = Duration::from_millis(100);
+        let mut waited = Duration::ZERO;
+
+        while waited < max_wait {
+            match self.process.try_wait() {
+                Ok(Some(_status)) => {
+                    return Ok(());
+                }
+                Ok(None) => {
+                    tokio::time::sleep(poll_interval).await;
+                    waited += poll_interval;
+                }
+                Err(e) => {
+                    log::error!("Error checking process: {}", e);
+                    break;
+                }
+            }
+        }
+
+        log::warn!(
+            "Process did not exit after {:.1}s, killing process group",
+            max_wait.as_secs_f32()
+        );
+
+        if let Err(e) = self.process.kill().await {
+            log::error!("Failed to kill process group: {}", e);
+        }
+
         let _ = tokio::time::timeout(
             Duration::from_millis(500),
             self.process.wait()
@@ -183,13 +211,11 @@ impl<C> GrpcProcess<C> {
     }
 
     /// Force kill - immediately kills the process group
-    /// Takes &mut self so caller retains ownership
     pub async fn force_kill(&mut self) -> Result<(), String> {
         self.process
             .kill()
             .await
             .map_err(|e| format!("Failed to kill process: {}", e))?;
-        // Reap the process to prevent zombies
         let _ = tokio::time::timeout(
             Duration::from_millis(500),
             self.process.wait()
@@ -198,23 +224,10 @@ impl<C> GrpcProcess<C> {
     }
 }
 
-impl<C> Drop for GrpcProcess<C> {
+impl Drop for ChildProcess {
     fn drop(&mut self) {
-        // Safety net: kill the process group if it wasn't explicitly shut down.
-        // Prevents orphaned Python processes when tasks are cancelled or the runtime exits.
-        // If the process was already killed/reaped, id() returns None and this is a no-op.
         if let Some(id) = self.process.inner().id() {
             kill_process_group(id);
         }
     }
-}
-
-pub async fn connect_grpc_channel(port: u16) -> Result<Channel, String> {
-    let endpoint = format!("http://127.0.0.1:{}", port);
-    Channel::from_shared(endpoint)
-        .map_err(|e| format!("Invalid gRPC endpoint: {}", e))?
-        .connect_timeout(Duration::from_secs(5))
-        .connect()
-        .await
-        .map_err(|e| format!("Failed to connect to gRPC service: {}", e))
 }

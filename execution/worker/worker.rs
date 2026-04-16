@@ -5,49 +5,23 @@ use std::sync::Arc;
 use tauri::{AppHandle, Manager};
 use tauri_specta::Event;
 use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::net::TcpStream;
 use tokio::process::ChildStderr;
 use tokio::sync::RwLock;
-use tonic::transport::Channel;
 
-use super::grpc::{worker_client::WorkerClient, *};
 use crate::execution::job::{Job, JobResult};
 use crate::execution::reports::ReportManager;
-use crate::grpc_process::GrpcProcess;
+use crate::child_process::ChildProcess;
+use execution_engine::protocol;
+use execution_engine::transport;
 
-// gRPC type conversions
-impl From<&crate::features::operator_ui::UiConfig> for UiConfig {
-    fn from(ui_config: &crate::features::operator_ui::UiConfig) -> Self {
-        UiConfig {
-            components: ui_config.components.iter().map(Into::into).collect(),
-        }
-    }
-}
-
-impl From<&crate::features::operator_ui::UiComponent> for UiComponent {
-    fn from(c: &crate::features::operator_ui::UiComponent) -> Self {
-        UiComponent {
-            key: c.key.clone(),
-            component_type: serde_json::to_string(&c.component_type)
-                .unwrap_or_default()
-                .trim_matches('"')
-                .to_string(),
-            label: c.label.clone(),
-            value_json: c
-                .value
-                .as_ref()
-                .map(|v| serde_json::to_string(v).unwrap_or_default()),
-        }
-    }
-}
-
-/// Convert gRPC Measurement to internal Measurement
-/// Returns None if value_json cannot be parsed
-fn try_measurement_from_grpc(m: Measurement) -> Option<crate::measurements::Measurement> {
-    let value = serde_json::from_str(&m.value_json).ok()?;
+/// Convert protocol Measurement to internal Measurement.
+/// Returns None if value cannot be parsed.
+fn try_measurement_from_protocol(m: protocol::Measurement) -> Option<crate::measurements::Measurement> {
+    let value = serde_json::from_value(m.value).ok()?;
     let aggregations = m
-        .aggregations_json
-        .as_ref()
-        .and_then(|json| serde_json::from_str(json).ok());
+        .aggregations
+        .and_then(|v| serde_json::from_value(v).ok());
     Some(crate::measurements::Measurement {
         name: m.name,
         value,
@@ -59,22 +33,10 @@ fn try_measurement_from_grpc(m: Measurement) -> Option<crate::measurements::Meas
     })
 }
 
-impl From<LogEntry> for crate::execution::log::LogEntry {
-    fn from(l: LogEntry) -> Self {
-        crate::execution::log::LogEntry {
-            timestamp: l.timestamp,
-            level: l.level,
-            message: l.message,
-            file: l.file,
-            line: l.line,
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct Worker {
     pub id: usize,
-    inner: Arc<RwLock<Option<GrpcProcess<WorkerClient<Channel>>>>>,
+    inner: Arc<RwLock<Option<ChildProcess>>>,
     procedure_dir: PathBuf,
 }
 
@@ -137,14 +99,14 @@ impl Worker {
         };
 
         log::debug!(
-            "Worker {} using gRPC script: {}",
+            "Worker {} using NDJSON script: {}",
             self.id,
             worker_script.display()
         );
 
         let worker_id = self.id;
 
-        let process = GrpcProcess::spawn(
+        let process = ChildProcess::spawn(
             python_cmd,
             worker_script,
             vec![abs_procedure_dir.to_string_lossy().to_string()],
@@ -153,14 +115,10 @@ impl Worker {
             Some(Box::new(move |stderr| {
                 Self::spawn_stderr_reader_static(worker_id, stderr);
             })),
-            |port| async move {
-                let channel = crate::grpc_process::connect_grpc_channel(port).await?;
-                Ok(WorkerClient::new(channel))
-            },
         )
         .await?;
 
-        log::debug!("Worker {} gRPC port: {}", self.id, process.port);
+        log::debug!("Worker {} TCP port: {}", self.id, process.port);
 
         let mut inner = self.inner.write().await;
         *inner = Some(process);
@@ -169,7 +127,6 @@ impl Worker {
     }
 
     /// Helper to execute operation on report manager(s) based on job slot
-    /// If job has slot_id, operates on single manager. Otherwise operates on all.
     async fn with_report_managers<F>(
         managers_arc: &Arc<RwLock<HashMap<String, ReportManager>>>,
         job_slot_id: Option<&String>,
@@ -214,7 +171,6 @@ impl Worker {
     ) -> Result<JobResult, String> {
         let start_time = chrono::Utc::now();
 
-        // Emit UI request if phase has components
         let has_ui = !job.ui_config.components.is_empty();
         let requires_user_input = job.ui_config.requires_user_input();
 
@@ -240,13 +196,12 @@ impl Worker {
                 if let Err(e) = crate::features::operator_ui::UiRequestEvent(event_data).emit(app) {
                     log::warn!("Failed to emit UI request for Python phase: {}", e);
                 } else {
-                    log::debug!("📺 Sent UI request {} for Python phase {}", request_id, job.phase_name);
+                    log::debug!("Sent UI request {} for Python phase {}", request_id, job.phase_name);
                 }
             }
 
             Some((request_id, rx))
         } else if has_ui && !requires_user_input {
-            // Display-only UI, emit but don't wait
             if let Some(app) = &app_handle {
                 let request_id = format!("{}_{}", job.id, chrono::Utc::now().timestamp_millis());
                 let event_data = crate::features::operator_ui::UiRequestData {
@@ -265,9 +220,9 @@ impl Worker {
             None
         };
 
-        // Build unit_info for gRPC if available
-        let grpc_unit_info = job.initial_unit_info.as_ref().map(|ui| {
-            super::grpc::UnitInfo {
+        // Build unit_info for NDJSON
+        let ndjson_unit_info = job.initial_unit_info.as_ref().map(|ui| {
+            protocol::UnitInfo {
                 serial_number: ui.serial_number.clone(),
                 part_number: ui.part_number.clone(),
                 revision_number: ui.revision_number.clone(),
@@ -276,8 +231,28 @@ impl Worker {
             }
         });
 
-        // Build gRPC command
-        let command = JobCommand {
+        // Build UI config for NDJSON
+        let ndjson_ui_config = protocol::UiConfig {
+            components: job.ui_config.components.iter().map(|c| {
+                protocol::UiComponent {
+                    key: c.key.clone(),
+                    component_type: serde_json::to_string(&c.component_type)
+                        .unwrap_or_default()
+                        .trim_matches('"')
+                        .to_string(),
+                    label: c.label.clone(),
+                    value: c.value.as_ref().map(|v| match v {
+                        crate::features::operator_ui::ComponentValue::Boolean(b) => serde_json::Value::Bool(*b),
+                        crate::features::operator_ui::ComponentValue::Number(n) => serde_json::json!(*n),
+                        crate::features::operator_ui::ComponentValue::String(s) => serde_json::Value::String(s.clone()),
+                        crate::features::operator_ui::ComponentValue::Array(arr) => serde_json::json!(arr),
+                    }),
+                }
+            }).collect(),
+        };
+
+        // Build command
+        let command = protocol::JobCommand {
             job_id: job.id.to_string(),
             slot_id: job
                 .slot_id
@@ -295,42 +270,42 @@ impl Worker {
                     )
                 })
                 .collect(),
-            ui_config: Some(self.convert_ui_config(&job.ui_config)),
+            ui_config: Some(ndjson_ui_config),
             timeout_ms: job.timeout_ms,
             retry_count: job.retry_count as u32,
             retry_limit: job.retry_limit as u32,
-            unit_info: grpc_unit_info,
+            unit_info: ndjson_unit_info,
             phase_results: job.phase_results.clone(),
         };
 
-        let mut client = {
+        // Connect to worker TCP and send command
+        let port = {
             let inner = self.inner.read().await;
-            inner
-                .as_ref()
-                .ok_or("gRPC worker not started")?
-                .client
-                .clone()
+            inner.as_ref().ok_or("Worker not started")?.port
         };
 
-        // Call ExecutePhase RPC
-        let mut stream = client
-            .execute_phase(command)
+        let stream = TcpStream::connect(format!("127.0.0.1:{}", port))
             .await
-            .map_err(|e| format!("gRPC ExecutePhase failed: {}", e))?
-            .into_inner();
+            .map_err(|e| format!("TCP connect to worker failed: {}", e))?;
 
-        // Process streaming responses
-        while let Some(event) = stream
-            .message()
-            .await
-            .map_err(|e| format!("gRPC stream error: {}", e))?
-        {
-            use worker_event::Event;
+        let (read_half, mut write_half) = tokio::io::split(stream);
+        let mut reader = BufReader::new(read_half);
 
-            match event.event {
-                Some(Event::JobComplete(grpc_result)) => {
-                    // Check phase result to determine if we should wait for UI
-                    let phase_result = grpc_result
+        transport::write_json_line(&mut write_half, &command).await?;
+
+        // Read streaming events until EOF
+        loop {
+            let event: Option<protocol::WorkerEvent> =
+                transport::read_json_line(&mut reader).await?;
+
+            let event = match event {
+                Some(e) => e,
+                None => break,
+            };
+
+            match event {
+                protocol::WorkerEvent::JobComplete(result) => {
+                    let phase_result = result
                         .phase_result_json
                         .as_ref()
                         .and_then(|json| serde_json::from_str(json).ok())
@@ -344,15 +319,13 @@ impl Worker {
                         crate::execution::job::PhaseResult::Skip
                             | crate::execution::job::PhaseResult::Stop
                             | crate::execution::job::PhaseResult::Fail
-                    ) || grpc_result.error.is_some();
+                    ) || result.error.is_some();
 
                     let mut ui_unit_info: Option<crate::execution::types::UnitInfo> = None;
                     let mut ui_bound_measurements: Option<HashMap<String, serde_json::Value>> = None;
                     if let Some((request_id, mut rx)) = ui_response_rx {
-                        // Check if UI was already submitted before Python finished
                         match rx.try_recv() {
                             Ok(ui_values) => {
-                                // UI was submitted before Python completed — use the data
                                 log::debug!("UI already submitted for phase {}", job.phase_name);
                                 if let Some((unit_info, bound)) = extract_bound_measurements(&ui_values) {
                                     ui_unit_info = unit_info;
@@ -361,7 +334,6 @@ impl Worker {
                             }
                             Err(tokio::sync::oneshot::error::TryRecvError::Empty) => {
                                 if is_terminal {
-                                    // Terminal result and UI not yet submitted — dismiss UI
                                     log::debug!(
                                         "Python phase {} returned terminal result {:?}, dismissing UI",
                                         job.phase_name, phase_result
@@ -370,7 +342,6 @@ impl Worker {
                                     let mut channels = crate::features::operator_ui::UI_RESPONSE_CHANNELS.lock().await;
                                     channels.remove(&request_id);
                                 } else {
-                                    // Continue result — wait for operator to submit
                                     log::debug!("Python phase {} finished, waiting for UI submission", job.phase_name);
                                     match rx.await {
                                         Ok(ui_values) => {
@@ -393,15 +364,10 @@ impl Worker {
                     }
 
                     let end_time = chrono::Utc::now();
-
-                    // Save phase measurements before job is consumed by convert_job_result
                     let phase_measurements = job.phase_measurements.clone();
 
-                    // Convert gRPC result to JobResult
-                    let mut job_result = self.convert_job_result(grpc_result, start_time, end_time, job)?;
+                    let mut job_result = convert_job_result(result, start_time, end_time, &job)?;
 
-                    // Merge UI bound measurements: UI fills in what Python didn't set,
-                    // Python wins on conflicts (same measurement name)
                     if let Some(bound) = ui_bound_measurements {
                         let existing_names: std::collections::HashSet<String> = job_result
                             .measurements
@@ -410,7 +376,6 @@ impl Worker {
                             .collect();
                         let bound_measurements = convert_bound_to_measurements(bound);
 
-                        // Evaluate bound measurements with YAML definitions (validators, units, etc.)
                         let phase_config = crate::procedure::schema::PhaseDefinition {
                             measurements: phase_measurements,
                             key: String::new(),
@@ -436,17 +401,16 @@ impl Worker {
                         }
                     }
 
-                    // Merge UI unit info if present
                     if let Some(ui_unit) = ui_unit_info {
                         job_result.unit = Some(merge_unit_info(job_result.unit, ui_unit));
                     }
 
                     return Ok(job_result);
                 }
-                Some(Event::Error(err)) => {
+                protocol::WorkerEvent::Error(err) => {
                     return Err(err.message);
                 }
-                Some(Event::AttachFile(attach_event)) => {
+                protocol::WorkerEvent::AttachFile(attach_event) => {
                     if let Some(ref managers_arc) = report_managers {
                         let source_path = attach_event.source_path.clone();
                         let attachment_name = attach_event.attachment_name.clone();
@@ -467,9 +431,8 @@ impl Worker {
                         .await;
                     }
                 }
-                Some(Event::AttachData(attach_event)) => {
+                protocol::WorkerEvent::AttachData(attach_event) => {
                     if let Some(ref managers_arc) = report_managers {
-                        // Decode base64 data once before passing to managers
                         match base64::engine::general_purpose::STANDARD.decode(&attach_event.data) {
                             Ok(bytes) => {
                                 let attachment_name = attach_event.attachment_name.clone();
@@ -502,7 +465,7 @@ impl Worker {
                         }
                     }
                 }
-                Some(Event::UiUpdate(ui_event)) => {
+                protocol::WorkerEvent::UiUpdate(ui_event) => {
                     if let Some(app) = app_handle.as_ref() {
                         let update_event = crate::execution::events::UiUpdateEvent {
                             job_id: job.id.to_string(),
@@ -516,9 +479,6 @@ impl Worker {
                         let _ = update_event.emit(app);
                     }
                 }
-                None => {
-                    return Err("Empty event received from worker".to_string());
-                }
             }
         }
 
@@ -529,22 +489,8 @@ impl Worker {
         let mut inner = self.inner.write().await;
 
         if let Some(ref mut process) = *inner {
-            let mut client = process.client.clone();
-            let result = process
-                .graceful_shutdown(
-                    || async move {
-                        let _ = client.shutdown(Empty {}).await;
-                        Ok(())
-                    },
-                    5,
-                )
-                .await;
-
-            // Take the process out after shutdown completes (it's dead now)
-            // This prevents double-killing and marks it as cleaned up
-            // If this future was cancelled before reaching here, kill_on_drop handles cleanup
+            let result = process.graceful_shutdown_signal(5).await;
             inner.take();
-
             result
         } else {
             Ok(())
@@ -556,98 +502,11 @@ impl Worker {
 
         if let Some(ref mut process) = *inner {
             let result = process.force_kill().await;
-
-            // Take the process out after kill (it's dead now)
             inner.take();
-
             result
         } else {
             Ok(())
         }
-    }
-
-    /// Convert internal UiConfig to gRPC UiConfig using From trait
-    fn convert_ui_config(&self, ui_config: &crate::features::operator_ui::UiConfig) -> UiConfig {
-        ui_config.into()
-    }
-
-    /// Convert gRPC JobResult to internal JobResult
-    /// Handles phase result parsing, measurement/log conversion, and unit info
-    fn convert_job_result(
-        &self,
-        result: super::grpc::JobResult,
-        start_time: chrono::DateTime<chrono::Utc>,
-        end_time: chrono::DateTime<chrono::Utc>,
-        job: Job,
-    ) -> Result<crate::execution::job::JobResult, String> {
-        use crate::execution::job::PhaseResult;
-
-        // Parse phase result from JSON
-        let phase_result = result
-            .phase_result_json
-            .as_ref()
-            .and_then(|json| serde_json::from_str(json).ok())
-            .and_then(|pr| PhaseResult::from_python_result(&pr).ok())
-            .unwrap_or(PhaseResult::Continue);
-
-        // Convert measurements, filtering invalid entries
-        let measurements: Vec<crate::measurements::Measurement> = result
-            .measurements
-            .into_iter()
-            .filter_map(try_measurement_from_grpc)
-            .collect();
-
-        // Build phase config for validator evaluation
-        let phase_config = crate::procedure::schema::PhaseDefinition {
-            measurements: job.phase_measurements.clone(),
-            key: String::new(),
-            name: String::new(),
-            scope: None,
-            python: None,
-            executable: None,
-            description: None,
-            depends_on: Vec::new(),
-            ui: None,
-            enabled: true,
-            result: None,
-            timeout: None,
-            retry: None,
-            then: None,
-        };
-
-        // Evaluate measurements and merge YAML validators
-        let evaluated_measurements = crate::measurements::auto_evaluate_measurements(measurements, &phase_config);
-
-        // Convert logs using From trait
-        let logs = result.logs.into_iter().map(Into::into).collect();
-
-        // Parse unit info from JSON if present
-        let unit = result.unit_json.and_then(|json| {
-            match serde_json::from_str(&json) {
-                Ok(u) => Some(u),
-                Err(e) => {
-                    log::warn!("Failed to parse unit_json: {} (json: {})", e, json);
-                    None
-                }
-            }
-        });
-
-        Ok(crate::execution::job::JobResult {
-            phase_result,
-            phase_outcome: crate::execution::job::Outcome::PENDING_COMPLETION,
-            next_action: None,
-            timeout_secs: None,
-            error: result.error,
-            exit_code: result.exit_code,
-            measurements: evaluated_measurements,
-            logs,
-            started_at: start_time,
-            completed_at: end_time,
-            resource_metrics: Default::default(),
-            unit,
-            input_unit_info: job.initial_unit_info.clone(),
-            retry_count: job.retry_count,
-        })
     }
 
     pub async fn interrupt_current_job(&mut self) -> Result<(), String> {
@@ -690,7 +549,7 @@ impl Worker {
         report_managers: Option<Arc<RwLock<HashMap<String, ReportManager>>>>,
     ) -> Result<JobResult, String> {
         log::debug!(
-            "🎮 Worker {} executing {} phase: {}",
+            "Worker {} executing {} phase: {}",
             self.id,
             match job.runtime_type {
                 crate::execution::job::RuntimeType::Native => "native Rust",
@@ -737,7 +596,7 @@ impl Worker {
         logs.push(crate::execution::log::LogEntry {
             timestamp: chrono::Utc::now().to_rfc3339(),
             level: "INFO".to_string(),
-            message: format!("🐚 Executing command with {}: {}", shell_type, command),
+            message: format!("Executing command with {}: {}", shell_type, command),
             file: None,
             line: None,
         });
@@ -745,7 +604,7 @@ impl Worker {
         logs.push(crate::execution::log::LogEntry {
             timestamp: chrono::Utc::now().to_rfc3339(),
             level: "INFO".to_string(),
-            message: format!("📁 Working directory: {}", working_dir.display()),
+            message: format!("Working directory: {}", working_dir.display()),
             file: None,
             line: None,
         });
@@ -811,7 +670,7 @@ impl Worker {
             logs.push(crate::execution::log::LogEntry {
                 timestamp: chrono::Utc::now().to_rfc3339(),
                 level: "INFO".to_string(),
-                message: "✅ Command succeeded with exit code 0".to_string(),
+                message: "Command succeeded with exit code 0".to_string(),
                 file: None,
                 line: None,
             });
@@ -821,7 +680,7 @@ impl Worker {
             logs.push(crate::execution::log::LogEntry {
                 timestamp: chrono::Utc::now().to_rfc3339(),
                 level: "ERROR".to_string(),
-                message: format!("❌ Command failed with exit code {}", exit_code),
+                message: format!("Command failed with exit code {}", exit_code),
                 file: None,
                 line: None,
             });
@@ -829,7 +688,6 @@ impl Worker {
         };
 
         let end_time = chrono::Utc::now();
-
         let resource_metrics = resource_tracker.collect_metrics();
 
         Ok(JobResult {
@@ -900,7 +758,7 @@ impl Worker {
                 }
 
                 log::debug!(
-                    "📺 Sent UI request {} for native phase {}",
+                    "Sent UI request {} for native phase {}",
                     request_id, job.phase_name
                 );
             }
@@ -925,7 +783,6 @@ impl Worker {
                         (crate::execution::job::PhaseResult::Continue, None)
                     }
                     Err(_) => {
-                        // Channel closed = phase was cancelled (e.g. on_first_failure: stop)
                         (crate::execution::job::PhaseResult::Stop, None)
                     }
                 }
@@ -988,25 +845,92 @@ impl Worker {
     }
 }
 
+/// Convert protocol JobResult to internal JobResult
+fn convert_job_result(
+    result: protocol::JobResult,
+    start_time: chrono::DateTime<chrono::Utc>,
+    end_time: chrono::DateTime<chrono::Utc>,
+    job: &Job,
+) -> Result<crate::execution::job::JobResult, String> {
+    use crate::execution::job::PhaseResult;
+
+    let phase_result = result
+        .phase_result_json
+        .as_ref()
+        .and_then(|json| serde_json::from_str(json).ok())
+        .and_then(|pr| PhaseResult::from_python_result(&pr).ok())
+        .unwrap_or(PhaseResult::Continue);
+
+    let measurements: Vec<crate::measurements::Measurement> = result
+        .measurements
+        .into_iter()
+        .filter_map(try_measurement_from_protocol)
+        .collect();
+
+    let phase_config = crate::procedure::schema::PhaseDefinition {
+        measurements: job.phase_measurements.clone(),
+        key: String::new(),
+        name: String::new(),
+        scope: None,
+        python: None,
+        executable: None,
+        description: None,
+        depends_on: Vec::new(),
+        ui: None,
+        enabled: true,
+        result: None,
+        timeout: None,
+        retry: None,
+        then: None,
+    };
+
+    let evaluated_measurements = crate::measurements::auto_evaluate_measurements(measurements, &phase_config);
+
+    let logs = result.logs.into_iter().map(|l| {
+        crate::execution::log::LogEntry {
+            timestamp: l.timestamp,
+            level: l.level,
+            message: l.message,
+            file: l.file,
+            line: l.line,
+        }
+    }).collect();
+
+    let unit = result.unit_json.and_then(|json| {
+        match serde_json::from_str(&json) {
+            Ok(u) => Some(u),
+            Err(e) => {
+                log::warn!("Failed to parse unit_json: {} (json: {})", e, json);
+                None
+            }
+        }
+    });
+
+    Ok(crate::execution::job::JobResult {
+        phase_result,
+        phase_outcome: crate::execution::job::Outcome::PENDING_COMPLETION,
+        next_action: None,
+        timeout_secs: None,
+        error: result.error,
+        exit_code: result.exit_code,
+        measurements: evaluated_measurements,
+        logs,
+        started_at: start_time,
+        completed_at: end_time,
+        resource_metrics: Default::default(),
+        unit,
+        input_unit_info: job.initial_unit_info.clone(),
+        retry_count: job.retry_count,
+    })
+}
+
 fn extract_unit_info_from_json(
     unit_data: &serde_json::Map<String, serde_json::Value>,
 ) -> crate::execution::types::UnitInfo {
-    let serial_number = unit_data
-        .get("serial_number")
-        .and_then(|v| v.as_str())
-        .map(String::from);
-    let batch_number = unit_data
-        .get("batch_number")
-        .and_then(|v| v.as_str())
-        .map(String::from);
-    let part_number = unit_data
-        .get("part_number")
-        .and_then(|v| v.as_str())
-        .map(String::from);
-    let revision_number = unit_data
-        .get("revision_number")
-        .and_then(|v| v.as_str())
-        .map(String::from);
+    let serial_number = unit_data.get("serial_number").and_then(|v| v.as_str()).map(String::from);
+    let batch_number = unit_data.get("batch_number").and_then(|v| v.as_str()).map(String::from);
+    let part_number = unit_data.get("part_number").and_then(|v| v.as_str()).map(String::from);
+    let revision_number = unit_data.get("revision_number").and_then(|v| v.as_str()).map(String::from);
 
     let sub_units = unit_data.get("sub_units").and_then(|v| {
         if let Some(obj) = v.as_object() {
@@ -1014,11 +938,7 @@ fn extract_unit_info_from_json(
                 .iter()
                 .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
                 .collect();
-            if parsed.is_empty() {
-                None
-            } else {
-                Some(parsed)
-            }
+            if parsed.is_empty() { None } else { Some(parsed) }
         } else {
             None
         }
@@ -1038,17 +958,14 @@ fn extract_bound_measurements(
     ui_values: &HashMap<String, String>,
 ) -> Option<(Option<crate::execution::types::UnitInfo>, HashMap<String, serde_json::Value>)> {
     let bound_json = ui_values.get("__bound_measurements__")?;
-    let mut bound: HashMap<String, serde_json::Value> =
-        serde_json::from_str(bound_json).ok()?;
+    let mut bound: HashMap<String, serde_json::Value> = serde_json::from_str(bound_json).ok()?;
 
     let unit_info = if let Some(unit_value) = bound.remove("__unit__") {
-        // Try to parse as object directly, or as JSON string
         let unit_data_opt = match &unit_value {
             serde_json::Value::Object(obj) => Some(obj.clone()),
             serde_json::Value::String(s) => serde_json::from_str(s).ok(),
             _ => None,
         };
-
         unit_data_opt.map(|unit_data| extract_unit_info_from_json(&unit_data))
     } else {
         None
@@ -1073,7 +990,7 @@ fn convert_bound_to_measurements(
             };
 
             crate::measurements::Measurement {
-                name: name.clone(),
+                name,
                 value: measurement_value,
                 unit: None,
                 timestamp: chrono::Utc::now().to_rfc3339(),
@@ -1085,15 +1002,12 @@ fn convert_bound_to_measurements(
         .collect()
 }
 
-/// Merge UI unit info with existing unit info
-/// UI values take precedence for sub_units, but are merged with existing values
 fn merge_unit_info(
     existing: Option<crate::execution::types::UnitInfo>,
     ui_unit: crate::execution::types::UnitInfo,
 ) -> crate::execution::types::UnitInfo {
     match existing {
         Some(mut base) => {
-            // Merge sub_units: UI values take precedence
             if let Some(ui_sub_units) = ui_unit.sub_units {
                 let mut merged_sub_units = base.sub_units.unwrap_or_default();
                 for (key, value) in ui_sub_units {
@@ -1101,19 +1015,10 @@ fn merge_unit_info(
                 }
                 base.sub_units = Some(merged_sub_units);
             }
-            // UI values override if present
-            if ui_unit.serial_number.is_some() {
-                base.serial_number = ui_unit.serial_number;
-            }
-            if ui_unit.part_number.is_some() {
-                base.part_number = ui_unit.part_number;
-            }
-            if ui_unit.revision_number.is_some() {
-                base.revision_number = ui_unit.revision_number;
-            }
-            if ui_unit.batch_number.is_some() {
-                base.batch_number = ui_unit.batch_number;
-            }
+            if ui_unit.serial_number.is_some() { base.serial_number = ui_unit.serial_number; }
+            if ui_unit.part_number.is_some() { base.part_number = ui_unit.part_number; }
+            if ui_unit.revision_number.is_some() { base.revision_number = ui_unit.revision_number; }
+            if ui_unit.batch_number.is_some() { base.batch_number = ui_unit.batch_number; }
             base
         }
         None => ui_unit,

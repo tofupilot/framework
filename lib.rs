@@ -6,7 +6,7 @@ pub mod cli;
 pub mod editor;
 pub mod execution;
 pub mod features;
-pub mod grpc_process;
+pub mod child_process;
 pub mod measurements;
 pub mod plugs;
 pub mod procedure;
