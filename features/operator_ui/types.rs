@@ -64,7 +64,6 @@ impl UiComponent {
             ComponentType::Text
                 | ComponentType::Progress
                 | ComponentType::Image
-                | ComponentType::ArtificialHorizon
         )
     }
 }
@@ -176,7 +175,6 @@ pub enum ComponentType {
     Text,
     Image,
     Progress,
-    ArtificialHorizon,
 }
 
 impl ComponentType {
@@ -200,7 +198,6 @@ impl ComponentType {
             "text",
             "image",
             "progress",
-            "artificial_horizon",
         ]
     }
 
@@ -224,7 +221,6 @@ impl ComponentType {
             "text" => Some(ComponentType::Text),
             "image" => Some(ComponentType::Image),
             "progress" => Some(ComponentType::Progress),
-            "artificial_horizon" => Some(ComponentType::ArtificialHorizon),
 
             _ => None,
         }
@@ -247,7 +243,6 @@ impl ComponentType {
             ComponentType::Text => "text",
             ComponentType::Image => "image",
             ComponentType::Progress => "progress",
-            ComponentType::ArtificialHorizon => "artificial_horizon",
         }
     }
 

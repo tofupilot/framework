@@ -51,7 +51,6 @@ fn convert_ui_component(proc_comp: &ProcedureUIComponent) -> UiComponent {
         crate::procedure::schema::UIComponentType::Text => ComponentType::Text,
         crate::procedure::schema::UIComponentType::Image => ComponentType::Image,
         crate::procedure::schema::UIComponentType::Progress => ComponentType::Progress,
-        crate::procedure::schema::UIComponentType::ArtificialHorizon => ComponentType::ArtificialHorizon,
     };
 
     UiComponent {

@@ -1732,7 +1732,6 @@ pub enum UIComponentType {
     Text,
     Image,
     Progress,
-    ArtificialHorizon,
 }
 
 #[derive(Debug, Serialize, Validate, Clone, specta::Type)]
