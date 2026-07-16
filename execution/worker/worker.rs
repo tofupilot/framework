@@ -223,7 +223,9 @@ impl Worker {
 
             let (tx, rx) = tokio::sync::oneshot::channel();
             {
-                let mut channels = crate::features::operator_ui::UI_RESPONSE_CHANNELS.lock().await;
+                let mut channels = crate::features::operator_ui::UI_RESPONSE_CHANNELS
+                    .lock()
+                    .await;
                 channels.insert(request_id.clone(), tx);
             }
 
@@ -240,7 +242,11 @@ impl Worker {
                 if let Err(e) = crate::features::operator_ui::UiRequestEvent(event_data).emit(app) {
                     log::warn!("Failed to emit UI request for Python phase: {}", e);
                 } else {
-                    log::debug!("📺 Sent UI request {} for Python phase {}", request_id, job.phase_name);
+                    log::debug!(
+                        "📺 Sent UI request {} for Python phase {}",
+                        request_id,
+                        job.phase_name
+                    );
                 }
             }
 
@@ -266,15 +272,17 @@ impl Worker {
         };
 
         // Build unit_info for gRPC if available
-        let grpc_unit_info = job.initial_unit_info.as_ref().map(|ui| {
-            super::grpc::UnitInfo {
+        let grpc_unit_info = job
+            .initial_unit_info
+            .as_ref()
+            .map(|ui| super::grpc::UnitInfo {
                 serial_number: ui.serial_number.clone(),
                 part_number: ui.part_number.clone(),
                 revision_number: ui.revision_number.clone(),
                 batch_number: ui.batch_number.clone(),
                 sub_units: ui.sub_units.clone().unwrap_or_default(),
-            }
-        });
+                metadata: ui.metadata.clone().unwrap_or_default(),
+            });
 
         // Build gRPC command
         let command = JobCommand {
@@ -347,14 +355,17 @@ impl Worker {
                     ) || grpc_result.error.is_some();
 
                     let mut ui_unit_info: Option<crate::execution::types::UnitInfo> = None;
-                    let mut ui_bound_measurements: Option<HashMap<String, serde_json::Value>> = None;
+                    let mut ui_bound_measurements: Option<HashMap<String, serde_json::Value>> =
+                        None;
                     if let Some((request_id, mut rx)) = ui_response_rx {
                         // Check if UI was already submitted before Python finished
                         match rx.try_recv() {
                             Ok(ui_values) => {
                                 // UI was submitted before Python completed — use the data
                                 log::debug!("UI already submitted for phase {}", job.phase_name);
-                                if let Some((unit_info, bound)) = extract_bound_measurements(&ui_values) {
+                                if let Some((unit_info, bound)) =
+                                    extract_bound_measurements(&ui_values)
+                                {
                                     ui_unit_info = unit_info;
                                     ui_bound_measurements = Some(bound);
                                 }
@@ -367,27 +378,44 @@ impl Worker {
                                         job.phase_name, phase_result
                                     );
                                     drop(rx);
-                                    let mut channels = crate::features::operator_ui::UI_RESPONSE_CHANNELS.lock().await;
+                                    let mut channels =
+                                        crate::features::operator_ui::UI_RESPONSE_CHANNELS
+                                            .lock()
+                                            .await;
                                     channels.remove(&request_id);
                                 } else {
                                     // Continue result — wait for operator to submit
-                                    log::debug!("Python phase {} finished, waiting for UI submission", job.phase_name);
+                                    log::debug!(
+                                        "Python phase {} finished, waiting for UI submission",
+                                        job.phase_name
+                                    );
                                     match rx.await {
                                         Ok(ui_values) => {
-                                            log::debug!("Received UI submission for phase {}", job.phase_name);
-                                            if let Some((unit_info, bound)) = extract_bound_measurements(&ui_values) {
+                                            log::debug!(
+                                                "Received UI submission for phase {}",
+                                                job.phase_name
+                                            );
+                                            if let Some((unit_info, bound)) =
+                                                extract_bound_measurements(&ui_values)
+                                            {
                                                 ui_unit_info = unit_info;
                                                 ui_bound_measurements = Some(bound);
                                             }
                                         }
                                         Err(_) => {
-                                            log::warn!("UI response channel closed for phase {}", job.phase_name);
+                                            log::warn!(
+                                                "UI response channel closed for phase {}",
+                                                job.phase_name
+                                            );
                                         }
                                     }
                                 }
                             }
                             Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
-                                log::warn!("UI response channel closed for phase {}", job.phase_name);
+                                log::warn!(
+                                    "UI response channel closed for phase {}",
+                                    job.phase_name
+                                );
                             }
                         }
                     }
@@ -398,7 +426,8 @@ impl Worker {
                     let phase_measurements = job.phase_measurements.clone();
 
                     // Convert gRPC result to JobResult
-                    let mut job_result = self.convert_job_result(grpc_result, start_time, end_time, job)?;
+                    let mut job_result =
+                        self.convert_job_result(grpc_result, start_time, end_time, job)?;
 
                     // Merge UI bound measurements: UI fills in what Python didn't set,
                     // Python wins on conflicts (same measurement name)
@@ -427,7 +456,10 @@ impl Worker {
                             retry: None,
                             then: None,
                         };
-                        let evaluated_bound = crate::measurements::auto_evaluate_measurements(bound_measurements, &phase_config);
+                        let evaluated_bound = crate::measurements::auto_evaluate_measurements(
+                            bound_measurements,
+                            &phase_config,
+                        );
 
                         for m in evaluated_bound {
                             if !existing_names.contains(&m.name) {
@@ -616,21 +648,22 @@ impl Worker {
         };
 
         // Evaluate measurements and merge YAML validators
-        let evaluated_measurements = crate::measurements::auto_evaluate_measurements(measurements, &phase_config);
+        let evaluated_measurements =
+            crate::measurements::auto_evaluate_measurements(measurements, &phase_config);
 
         // Convert logs using From trait
         let logs = result.logs.into_iter().map(Into::into).collect();
 
         // Parse unit info from JSON if present
-        let unit = result.unit_json.and_then(|json| {
-            match serde_json::from_str(&json) {
+        let unit = result
+            .unit_json
+            .and_then(|json| match serde_json::from_str(&json) {
                 Ok(u) => Some(u),
                 Err(e) => {
                     log::warn!("Failed to parse unit_json: {} (json: {})", e, json);
                     None
                 }
-            }
-        });
+            });
 
         Ok(crate::execution::job::JobResult {
             phase_result,
@@ -647,6 +680,8 @@ impl Worker {
             unit,
             input_unit_info: job.initial_unit_info.clone(),
             retry_count: job.retry_count,
+            run_metadata: parse_metadata_json("run_metadata_json", result.run_metadata_json),
+            unit_metadata: parse_metadata_json("unit_metadata_json", result.unit_metadata_json),
         })
     }
 
@@ -701,7 +736,9 @@ impl Worker {
         );
 
         match job.runtime_type {
-            crate::execution::job::RuntimeType::Native => self.execute_native_phase(job, app_handle).await,
+            crate::execution::job::RuntimeType::Native => {
+                self.execute_native_phase(job, app_handle).await
+            }
             crate::execution::job::RuntimeType::Python => {
                 self.execute_python_phase(job, plug_ports, app_handle, report_managers)
                     .await
@@ -731,7 +768,8 @@ impl Worker {
             ));
         }
 
-        let shell_builder = crate::execution::runtime::shell::ShellCommandBuilder::new(job.shell_type.as_deref())?;
+        let shell_builder =
+            crate::execution::runtime::shell::ShellCommandBuilder::new(job.shell_type.as_deref())?;
         let shell_type = shell_builder.shell_type().to_string();
 
         logs.push(crate::execution::log::LogEntry {
@@ -847,6 +885,8 @@ impl Worker {
             unit: None,
             input_unit_info: job.initial_unit_info.clone(),
             retry_count: job.retry_count,
+            run_metadata: Default::default(),
+            unit_metadata: Default::default(),
         })
     }
 
@@ -869,7 +909,9 @@ impl Worker {
             let ui_response_rx = if requires_user_input {
                 let (tx, rx) = tokio::sync::oneshot::channel();
                 {
-                    let mut channels = crate::features::operator_ui::UI_RESPONSE_CHANNELS.lock().await;
+                    let mut channels = crate::features::operator_ui::UI_RESPONSE_CHANNELS
+                        .lock()
+                        .await;
                     channels.insert(request_id.clone(), tx);
                 }
 
@@ -893,15 +935,13 @@ impl Worker {
                 };
 
                 if let Err(e) = crate::features::operator_ui::UiRequestEvent(event_data).emit(app) {
-                    log::debug!(
-                        "Failed to emit UI request: {}",
-                        e
-                    );
+                    log::debug!("Failed to emit UI request: {}", e);
                 }
 
                 log::debug!(
                     "📺 Sent UI request {} for native phase {}",
-                    request_id, job.phase_name
+                    request_id,
+                    job.phase_name
                 );
             }
 
@@ -965,7 +1005,8 @@ impl Worker {
             all_measurements = convert_bound_to_measurements(bound);
         }
 
-        let evaluated_measurements = crate::measurements::auto_evaluate_measurements(all_measurements, &phase_config);
+        let evaluated_measurements =
+            crate::measurements::auto_evaluate_measurements(all_measurements, &phase_config);
 
         let resource_metrics = resource_tracker.collect_metrics();
 
@@ -984,6 +1025,8 @@ impl Worker {
             unit: unit_info,
             input_unit_info: job.initial_unit_info.clone(),
             retry_count: job.retry_count,
+            run_metadata: Default::default(),
+            unit_metadata: Default::default(),
         })
     }
 }
@@ -1031,15 +1074,19 @@ fn extract_unit_info_from_json(
         revision_number,
         sub_units,
         status: "tested".to_string(),
+        // Python unit metadata flows via unit_metadata_json, not __unit__.
+        metadata: None,
     }
 }
 
 fn extract_bound_measurements(
     ui_values: &HashMap<String, String>,
-) -> Option<(Option<crate::execution::types::UnitInfo>, HashMap<String, serde_json::Value>)> {
+) -> Option<(
+    Option<crate::execution::types::UnitInfo>,
+    HashMap<String, serde_json::Value>,
+)> {
     let bound_json = ui_values.get("__bound_measurements__")?;
-    let mut bound: HashMap<String, serde_json::Value> =
-        serde_json::from_str(bound_json).ok()?;
+    let mut bound: HashMap<String, serde_json::Value> = serde_json::from_str(bound_json).ok()?;
 
     let unit_info = if let Some(unit_value) = bound.remove("__unit__") {
         // Try to parse as object directly, or as JSON string
@@ -1066,10 +1113,14 @@ fn convert_bound_to_measurements(
             let measurement_value = match value {
                 serde_json::Value::Null => crate::measurements::MeasurementValue::Null,
                 serde_json::Value::Bool(b) => crate::measurements::MeasurementValue::Boolean(b),
-                serde_json::Value::Number(n) => crate::measurements::MeasurementValue::Numeric(n.as_f64().unwrap_or(0.0)),
+                serde_json::Value::Number(n) => {
+                    crate::measurements::MeasurementValue::Numeric(n.as_f64().unwrap_or(0.0))
+                }
                 serde_json::Value::String(s) => crate::measurements::MeasurementValue::String(s),
                 serde_json::Value::Array(arr) => crate::measurements::MeasurementValue::Array(arr),
-                serde_json::Value::Object(obj) => crate::measurements::MeasurementValue::Object(obj),
+                serde_json::Value::Object(obj) => {
+                    crate::measurements::MeasurementValue::Object(obj)
+                }
             };
 
             crate::measurements::Measurement {
@@ -1087,6 +1138,23 @@ fn convert_bound_to_measurements(
 
 /// Merge UI unit info with existing unit info
 /// UI values take precedence for sub_units, but are merged with existing values
+/// Parse a double-encoded metadata JSON object from the worker. Metadata
+/// must never crash a run — malformed JSON is logged and dropped, same
+/// failure mode as `unit_json`.
+fn parse_metadata_json(
+    label: &str,
+    json: Option<String>,
+) -> std::collections::HashMap<String, serde_json::Value> {
+    json.and_then(|j| match serde_json::from_str(&j) {
+        Ok(m) => Some(m),
+        Err(e) => {
+            log::warn!("Failed to parse {}: {} (json: {})", label, e, j);
+            None
+        }
+    })
+    .unwrap_or_default()
+}
+
 fn merge_unit_info(
     existing: Option<crate::execution::types::UnitInfo>,
     ui_unit: crate::execution::types::UnitInfo,
@@ -1113,6 +1181,11 @@ fn merge_unit_info(
             }
             if ui_unit.batch_number.is_some() {
                 base.batch_number = ui_unit.batch_number;
+            }
+            if let Some(ui_md) = ui_unit.metadata {
+                base.metadata
+                    .get_or_insert_with(Default::default)
+                    .extend(ui_md);
             }
             base
         }

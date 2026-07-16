@@ -97,7 +97,8 @@ impl OrchestratorState {
 
     /// Clean up finished delayed retry task handles
     pub fn cleanup_finished_retry_handles(&mut self) {
-        self.pending_delayed_retry_handles.retain(|pending| !pending.handle.is_finished());
+        self.pending_delayed_retry_handles
+            .retain(|pending| !pending.handle.is_finished());
     }
 
     /// Get the next ready job from the queue
@@ -154,12 +155,7 @@ impl OrchestratorState {
         self.original_jobs_completed += 1;
     }
 
-    pub fn complete_job_with_info(
-        &mut self,
-        job_id: Uuid,
-        job: &Job,
-        result: JobResult,
-    ) {
+    pub fn complete_job_with_info(&mut self, job_id: Uuid, job: &Job, result: JobResult) {
         self.job_info.insert(job_id, JobInfo::from_job(job));
         self.complete_original_job(job_id, result);
     }
@@ -197,7 +193,7 @@ impl OrchestratorState {
             let result = JobResult {
                 phase_result: crate::execution::job::PhaseResult::Skip,
                 phase_outcome: crate::execution::job::Outcome::Skip,
-                next_action: None,   // Will be computed in completion handler
+                next_action: None, // Will be computed in completion handler
                 timeout_secs: None,
                 error: None,
                 exit_code: None,
@@ -209,6 +205,8 @@ impl OrchestratorState {
                 unit: None,
                 input_unit_info: None,
                 retry_count: job.retry_count,
+                run_metadata: Default::default(),
+                unit_metadata: Default::default(),
             };
             // Populate job_info so cancelled jobs appear in the report
             self.job_info.insert(job.id, JobInfo::from_job(job));
@@ -265,6 +263,8 @@ impl OrchestratorState {
                 unit: None,
                 input_unit_info: None,
                 retry_count: job.retry_count,
+                run_metadata: Default::default(),
+                unit_metadata: Default::default(),
             };
             // Populate job_info so cancelled jobs appear in the report
             self.job_info.insert(job.id, JobInfo::from_job(job));

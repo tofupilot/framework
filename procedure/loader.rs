@@ -1,5 +1,5 @@
-use crate::procedure::schema::{ProcedureDefinition, ProcedureYaml};
 use super::error::CommandError;
+use crate::procedure::schema::{ProcedureDefinition, ProcedureYaml};
 use std::path::Path;
 use validator::Validate;
 
@@ -8,18 +8,17 @@ fn validate_file_path(path: &Path) -> Result<(), CommandError> {
         return Err(CommandError::file_not_found(path.display()));
     }
 
-    let extension = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .ok_or_else(|| CommandError::new(
+    let extension = path.extension().and_then(|e| e.to_str()).ok_or_else(|| {
+        CommandError::new(
             super::error::ErrorCode::InvalidFileExtension,
-            "File has no extension"
-        ))?;
+            "File has no extension",
+        )
+    })?;
 
     if extension != "yaml" && extension != "yml" {
         return Err(CommandError::new(
             super::error::ErrorCode::InvalidFileExtension,
-            "File must be a YAML file (.yaml or .yml)"
+            "File must be a YAML file (.yaml or .yml)",
         ));
     }
 
@@ -33,8 +32,8 @@ pub fn load_procedure_definition(file_path: &Path) -> Result<ProcedureDefinition
     let content = std::fs::read_to_string(file_path)
         .map_err(|e| format!("Failed to read {}: {}", file_path.display(), e))?;
 
-    let raw: ProcedureYaml = serde_yaml::from_str(&content)
-        .map_err(|e| format!("Failed to parse YAML: {}", e))?;
+    let raw: ProcedureYaml =
+        serde_yaml::from_str(&content).map_err(|e| format!("Failed to parse YAML: {}", e))?;
 
     let procedure_def = ProcedureDefinition::from(raw);
 
@@ -45,6 +44,14 @@ pub fn load_procedure_definition(file_path: &Path) -> Result<ProcedureDefinition
     if let Some(unit) = &procedure_def.unit {
         unit.validate_auto_identify()
             .map_err(|e| format!("Validation failed: {}", e))?;
+
+        if let Some(md) = &unit.metadata {
+            crate::procedure::schema::validate_metadata_keys(
+                md.keys().map(|k| k.as_str()),
+                "unit.metadata",
+            )
+            .map_err(|e| format!("Validation failed: {}", e))?;
+        }
     }
 
     for (_, phase) in procedure_def.get_all_phases_with_stage_scope() {

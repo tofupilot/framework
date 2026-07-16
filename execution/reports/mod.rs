@@ -30,6 +30,14 @@ pub struct Report {
     pub outcome: Outcome,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub unit: Option<crate::execution::types::UnitInfo>,
+    /// Run-level metadata folded from per-phase `run.metadata[...]`
+    /// writes, in phase start order (later per-key writes win).
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub run_metadata: HashMap<String, serde_json::Value>,
+    /// Unit-level metadata: operator identify-form values overlaid with
+    /// per-phase `unit.metadata[...]` writes (later writes win).
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub unit_metadata: HashMap<String, serde_json::Value>,
     pub phases: Vec<Phase>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dashboard: Option<DashboardInfo>,
@@ -126,7 +134,12 @@ impl ReportManager {
         };
 
         let dir_name = if let Some(slot) = slot_id {
-            format!("{}_RUN_{}_{}", timestamp.format("%Y-%m-%d_%H%M%S"), short_id, slot)
+            format!(
+                "{}_RUN_{}_{}",
+                timestamp.format("%Y-%m-%d_%H%M%S"),
+                short_id,
+                slot
+            )
         } else {
             format!("{}_RUN_{}", timestamp.format("%Y-%m-%d_%H%M%S"), short_id)
         };
@@ -241,14 +254,24 @@ impl ReportManager {
                 let mut merged = self.initial_unit_info.clone();
 
                 // Build phase declaration order map (setup → main → teardown)
-                let phase_declaration_order: HashMap<String, usize> = self.procedure_def
+                let phase_declaration_order: HashMap<String, usize> = self
+                    .procedure_def
                     .as_ref()
                     .map(|def| {
                         let mut order = HashMap::new();
                         let mut idx = 0;
-                        for p in &def.setup { order.insert(p.key.clone(), idx); idx += 1; }
-                        for p in &def.main { order.insert(p.key.clone(), idx); idx += 1; }
-                        for p in &def.teardown { order.insert(p.key.clone(), idx); idx += 1; }
+                        for p in &def.setup {
+                            order.insert(p.key.clone(), idx);
+                            idx += 1;
+                        }
+                        for p in &def.main {
+                            order.insert(p.key.clone(), idx);
+                            idx += 1;
+                        }
+                        for p in &def.teardown {
+                            order.insert(p.key.clone(), idx);
+                            idx += 1;
+                        }
                         order
                     })
                     .unwrap_or_default();
@@ -259,7 +282,10 @@ impl ReportManager {
                 // arbitrary slot's initial values and would incorrectly overwrite this slot's data.
                 let mut best_by_phase: HashMap<String, (&uuid::Uuid, &JobResult)> = HashMap::new();
                 // Separately track the first attempt's input_unit_info per phase (lowest retry_count).
-                let mut first_input_by_phase: HashMap<String, (usize, Option<crate::execution::types::UnitInfo>)> = HashMap::new();
+                let mut first_input_by_phase: HashMap<
+                    String,
+                    (usize, Option<crate::execution::types::UnitInfo>),
+                > = HashMap::new();
                 for (id, r) in job_results.iter() {
                     if r.unit.is_none() {
                         continue;
@@ -280,16 +306,21 @@ impl ReportManager {
                         .map(|(c, _)| *c)
                         .unwrap_or(usize::MAX);
                     if r.retry_count <= prev_min {
-                        first_input_by_phase.insert(info.phase_key.clone(), (r.retry_count, r.input_unit_info.clone()));
+                        first_input_by_phase.insert(
+                            info.phase_key.clone(),
+                            (r.retry_count, r.input_unit_info.clone()),
+                        );
                     }
                 }
                 let mut job_results_with_unit: Vec<_> = best_by_phase.into_iter().collect();
                 job_results_with_unit.sort_by(|(_key_a, (id_a, a)), (_key_b, (id_b, b))| {
-                    let pos_a = job_info.get(id_a)
+                    let pos_a = job_info
+                        .get(id_a)
                         .and_then(|i| phase_declaration_order.get(&i.phase_key))
                         .copied()
                         .unwrap_or(usize::MAX);
-                    let pos_b = job_info.get(id_b)
+                    let pos_b = job_info
+                        .get(id_b)
                         .and_then(|i| phase_declaration_order.get(&i.phase_key))
                         .copied()
                         .unwrap_or(usize::MAX);
@@ -301,52 +332,84 @@ impl ReportManager {
                         // Compare against the FIRST attempt's input, not the final retry's input.
                         // This ensures that when a retry sets the same value as a previous attempt,
                         // it's still detected as a change relative to what the phase originally received.
-                        let first_input = first_input_by_phase.get(&phase_key).and_then(|(_, inp)| inp.as_ref());
+                        let first_input = first_input_by_phase
+                            .get(&phase_key)
+                            .and_then(|(_, inp)| inp.as_ref());
                         let input = first_input.or(result.input_unit_info.as_ref());
                         let input_serial = input.and_then(|u| u.serial_number.clone());
                         let input_part = input.and_then(|u| u.part_number.clone());
                         let input_revision = input.and_then(|u| u.revision_number.clone());
                         let input_batch = input.and_then(|u| u.batch_number.clone());
-                        let input_sub_units = input.and_then(|u| u.sub_units.clone()).unwrap_or_default();
+                        let input_sub_units =
+                            input.and_then(|u| u.sub_units.clone()).unwrap_or_default();
 
                         merged = Some(match merged {
                             Some(base) => {
                                 // Merge sub_units maps, but only if the phase actually changed the value
-                                let merged_sub_units = match (base.sub_units, phase_unit.sub_units.clone()) {
-                                    (Some(mut base_subs), Some(phase_subs)) => {
-                                        for (key, value) in phase_subs {
-                                            if input_sub_units.get(&key) != Some(&value) {
-                                                base_subs.insert(key, value);
+                                let merged_sub_units =
+                                    match (base.sub_units, phase_unit.sub_units.clone()) {
+                                        (Some(mut base_subs), Some(phase_subs)) => {
+                                            for (key, value) in phase_subs {
+                                                if input_sub_units.get(&key) != Some(&value) {
+                                                    base_subs.insert(key, value);
+                                                }
+                                            }
+                                            Some(base_subs)
+                                        }
+                                        (Some(base_subs), None) => Some(base_subs),
+                                        (None, Some(phase_subs)) => {
+                                            let filtered: HashMap<String, String> = phase_subs
+                                                .into_iter()
+                                                .filter(|(k, v)| input_sub_units.get(k) != Some(v))
+                                                .collect();
+                                            if filtered.is_empty() {
+                                                None
+                                            } else {
+                                                Some(filtered)
                                             }
                                         }
-                                        Some(base_subs)
-                                    }
-                                    (Some(base_subs), None) => Some(base_subs),
-                                    (None, Some(phase_subs)) => {
-                                        let filtered: HashMap<String, String> = phase_subs
-                                            .into_iter()
-                                            .filter(|(k, v)| input_sub_units.get(k) != Some(v))
-                                            .collect();
-                                        if filtered.is_empty() { None } else { Some(filtered) }
-                                    }
-                                    (None, None) => None,
-                                };
+                                        (None, None) => None,
+                                    };
 
                                 // Helper: only update if phase value differs from what it received
-                                let merge_field = |phase_val: &Option<String>, base_val: Option<String>, input_val: &Option<String>| -> Option<String> {
-                                    match phase_val {
-                                        Some(v) if phase_val != input_val => Some(v.clone()),
-                                        _ => base_val,
-                                    }
-                                };
+                                let merge_field =
+                                    |phase_val: &Option<String>,
+                                     base_val: Option<String>,
+                                     input_val: &Option<String>|
+                                     -> Option<String> {
+                                        match phase_val {
+                                            Some(v) if phase_val != input_val => Some(v.clone()),
+                                            _ => base_val,
+                                        }
+                                    };
 
                                 crate::execution::types::UnitInfo {
-                                    serial_number: merge_field(&phase_unit.serial_number, base.serial_number, &input_serial),
-                                    part_number: merge_field(&phase_unit.part_number, base.part_number, &input_part),
-                                    revision_number: merge_field(&phase_unit.revision_number, base.revision_number, &input_revision),
-                                    batch_number: merge_field(&phase_unit.batch_number, base.batch_number, &input_batch),
+                                    serial_number: merge_field(
+                                        &phase_unit.serial_number,
+                                        base.serial_number,
+                                        &input_serial,
+                                    ),
+                                    part_number: merge_field(
+                                        &phase_unit.part_number,
+                                        base.part_number,
+                                        &input_part,
+                                    ),
+                                    revision_number: merge_field(
+                                        &phase_unit.revision_number,
+                                        base.revision_number,
+                                        &input_revision,
+                                    ),
+                                    batch_number: merge_field(
+                                        &phase_unit.batch_number,
+                                        base.batch_number,
+                                        &input_batch,
+                                    ),
                                     sub_units: merged_sub_units,
                                     status: phase_unit.status.clone(),
+                                    // Operator-entered metadata rides the
+                                    // identify-time base; typed Python writes
+                                    // land in the report's unit_metadata map.
+                                    metadata: phase_unit.metadata.clone().or(base.metadata),
                                 }
                             }
                             None => phase_unit.clone(),
@@ -367,6 +430,71 @@ impl ReportManager {
             // Sort phases by start time
             phases.sort_by_key(|p| p.start_time);
 
+            // Fold run/unit metadata with per-phase retry-replace
+            // semantics (parity with the CLI's upsert_metadata_source):
+            // only each phase's FINAL attempt contributes, so keys a
+            // failed attempt wrote don't leak into a passing run.
+            // Unit metadata excludes shared phases (slot_id = None) for
+            // the same reason the unit-info fold above does — their
+            // writes belong to an arbitrary slot. Operator-entered
+            // identify metadata seeds the unit map first.
+            let mut best_md_by_phase: HashMap<String, (&JobResult, bool)> = HashMap::new();
+            for (id, r) in job_results.iter() {
+                let info = match job_info.get(id) {
+                    Some(i) => i,
+                    None => continue,
+                };
+                let slot_specific = info.slot_id.is_some();
+                let prev_count = best_md_by_phase
+                    .get(&info.phase_key)
+                    .map(|(r, _)| r.retry_count)
+                    .unwrap_or(0);
+                if r.retry_count >= prev_count {
+                    best_md_by_phase.insert(info.phase_key.clone(), (r, slot_specific));
+                }
+            }
+            let mut metadata_sources: Vec<(&JobResult, bool)> =
+                best_md_by_phase.into_values().collect();
+            metadata_sources.sort_by_key(|(r, _)| r.started_at);
+
+            let mut run_metadata: HashMap<String, serde_json::Value> = HashMap::new();
+            let mut unit_metadata: HashMap<String, serde_json::Value> = HashMap::new();
+            if let Some(md) = collected_unit_info
+                .as_ref()
+                .and_then(|u| u.metadata.as_ref())
+            {
+                for (k, v) in md {
+                    unit_metadata.insert(k.clone(), serde_json::Value::String(v.clone()));
+                }
+            }
+            for (result, slot_specific) in metadata_sources {
+                run_metadata.extend(result.run_metadata.clone());
+                if slot_specific {
+                    unit_metadata.extend(result.unit_metadata.clone());
+                }
+            }
+            // Cap at the server's 50-keys-per-entity limit (parity with
+            // the CLI): sorted order makes the drop deterministic.
+            for (label, map) in [
+                ("run_metadata", &mut run_metadata),
+                ("unit_metadata", &mut unit_metadata),
+            ] {
+                if map.len() > 50 {
+                    let mut keys: Vec<String> = map.keys().cloned().collect();
+                    keys.sort();
+                    let dropped = &keys[50..];
+                    log::warn!(
+                        "report {} exceeds 50 keys ({}); dropping: {}",
+                        label,
+                        map.len(),
+                        dropped.join(", ")
+                    );
+                    for k in dropped {
+                        map.remove(k);
+                    }
+                }
+            }
+
             let procedure_def = self
                 .procedure_def
                 .as_ref()
@@ -384,6 +512,8 @@ impl ReportManager {
                 },
                 outcome: stats.run_outcome.unwrap_or(Outcome::Pass),
                 unit: collected_unit_info,
+                run_metadata,
+                unit_metadata,
                 phases,
                 dashboard: None,
             };
@@ -433,7 +563,9 @@ impl ReportManager {
             .map(|info| {
                 (
                     info.phase_name.clone(),
-                    info.slot_id.clone().unwrap_or_else(|| "<shared>".to_string()),
+                    info.slot_id
+                        .clone()
+                        .unwrap_or_else(|| "<shared>".to_string()),
                 )
             })
             .unwrap_or_else(|| ("Unknown".to_string(), "Unknown".to_string()));

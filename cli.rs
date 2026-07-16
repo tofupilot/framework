@@ -23,9 +23,18 @@ pub fn parse_args() -> PathBuf {
 pub fn print_help(program_name: &str) {
     println!("TofuPilot");
     println!("\nUsage:");
-    println!("  {}                       Launch GUI application", program_name);
-    println!("  {} run <procedure.yaml>  Run procedure in CLI mode", program_name);
-    println!("  {} help                  Show this help message", program_name);
+    println!(
+        "  {}                       Launch GUI application",
+        program_name
+    );
+    println!(
+        "  {} run <procedure.yaml>  Run procedure in CLI mode",
+        program_name
+    );
+    println!(
+        "  {} help                  Show this help message",
+        program_name
+    );
 }
 
 pub fn run(procedure_path: PathBuf) {
@@ -46,12 +55,22 @@ pub fn run(procedure_path: PathBuf) {
             }
         };
 
-        let procedure_dir = procedure_path.parent().unwrap_or_else(|| std::path::Path::new(".")).to_path_buf();
+        let procedure_dir = procedure_path
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."))
+            .to_path_buf();
 
-        let worker_count = procedure_def.execution.as_ref().map(|e| e.workers).unwrap_or_else(|| {
-            log::warn!("No execution section found in procedure, defaulting to {} workers", crate::procedure::schema::DEFAULT_WORKERS);
-            crate::procedure::schema::DEFAULT_WORKERS
-        });
+        let worker_count = procedure_def
+            .execution
+            .as_ref()
+            .map(|e| e.workers)
+            .unwrap_or_else(|| {
+                log::warn!(
+                    "No execution section found in procedure, defaulting to {} workers",
+                    crate::procedure::schema::DEFAULT_WORKERS
+                );
+                crate::procedure::schema::DEFAULT_WORKERS
+            });
         let execution_id = uuid::Uuid::new_v4().to_string();
         let run_id = uuid::Uuid::new_v4().to_string();
         let mut orchestrator = Orchestrator::new(
@@ -94,7 +113,9 @@ pub fn run(procedure_path: PathBuf) {
             let sub_units = if let Some(sub_units_config) = &unit_config.sub_units {
                 let mut sub_units_map = std::collections::HashMap::new();
                 for item in &sub_units_config.0 {
-                    let default_value = item.serial_number.as_ref()
+                    let default_value = item
+                        .serial_number
+                        .as_ref()
                         .and_then(|c| c.default_value.clone())
                         .unwrap_or_default();
                     sub_units_map.insert(item.get_key(), default_value);
@@ -108,13 +129,40 @@ pub fn run(procedure_path: PathBuf) {
                 None
             };
 
+            // Metadata fields with a default_value resolve like other
+            // fields; default-less fields are simply absent.
+            let metadata: Option<std::collections::HashMap<String, String>> = unit_config
+                .metadata
+                .as_ref()
+                .map(|md| {
+                    md.iter()
+                        .filter_map(|(key, f)| {
+                            f.default_value.clone().map(|val| (key.clone(), val))
+                        })
+                        .collect::<std::collections::HashMap<String, String>>()
+                })
+                .filter(|m| !m.is_empty());
+
             UnitInfo {
-                serial_number: unit_config.serial_number.as_ref().and_then(|c| c.default_value.clone()),
-                part_number: unit_config.part_number.as_ref().and_then(|c| c.default_value.clone()),
-                revision_number: unit_config.revision_number.as_ref().and_then(|c| c.default_value.clone()),
-                batch_number: unit_config.batch_number.as_ref().and_then(|c| c.default_value.clone()),
+                serial_number: unit_config
+                    .serial_number
+                    .as_ref()
+                    .and_then(|c| c.default_value.clone()),
+                part_number: unit_config
+                    .part_number
+                    .as_ref()
+                    .and_then(|c| c.default_value.clone()),
+                revision_number: unit_config
+                    .revision_number
+                    .as_ref()
+                    .and_then(|c| c.default_value.clone()),
+                batch_number: unit_config
+                    .batch_number
+                    .as_ref()
+                    .and_then(|c| c.default_value.clone()),
                 sub_units,
                 status: "active".to_string(),
+                metadata,
             }
         } else {
             UnitInfo {
@@ -124,12 +172,14 @@ pub fn run(procedure_path: PathBuf) {
                 batch_number: None,
                 sub_units: None,
                 status: "active".to_string(),
+                metadata: None,
             }
         };
 
         // Set unit infos BEFORE initializing report managers (same order as GUI flow)
         // In CLI mode, all slots share the same unit info
-        let unit_infos: std::collections::HashMap<String, UnitInfo> = slots.iter()
+        let unit_infos: std::collections::HashMap<String, UnitInfo> = slots
+            .iter()
             .map(|slot_id| (slot_id.clone(), unit_info.clone()))
             .collect();
 
@@ -139,7 +189,11 @@ pub fn run(procedure_path: PathBuf) {
             .initialize_report_managers(&procedure_path, &slots, &unit_infos)
             .await;
 
-        let strategy = procedure_def.execution.as_ref().map(|e| e.strategy).unwrap_or(crate::procedure::schema::ExecutionStrategy::PhaseFirst);
+        let strategy = procedure_def
+            .execution
+            .as_ref()
+            .map(|e| e.strategy)
+            .unwrap_or(crate::procedure::schema::ExecutionStrategy::PhaseFirst);
         if let Err(e) = orchestrator
             .submit_procedure(slots, strategy, unit_infos)
             .await
@@ -152,11 +206,24 @@ pub fn run(procedure_path: PathBuf) {
         let exit_code = match orchestrator.execute_all(None).await {
             Ok(stats) => {
                 let passed = stats.completed_jobs - stats.failed_jobs;
-                let status = if stats.failed_jobs == 0 { "PASSED" } else { "FAILED" };
+                let status = if stats.failed_jobs == 0 {
+                    "PASSED"
+                } else {
+                    "FAILED"
+                };
 
-                log::info!("Result: {} ({} passed, {} failed)", status, passed, stats.failed_jobs);
+                log::info!(
+                    "Result: {} ({} passed, {} failed)",
+                    status,
+                    passed,
+                    stats.failed_jobs
+                );
 
-                if stats.failed_jobs == 0 { 0 } else { 1 }
+                if stats.failed_jobs == 0 {
+                    0
+                } else {
+                    1
+                }
             }
             Err(e) => {
                 log::error!("Execution failed: {}", e);

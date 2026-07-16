@@ -27,10 +27,13 @@ fn validate_sub_units_config(config: &SubUnitsConfig) -> Result<(), validator::V
         let key = item.get_key().to_lowercase();
         if seen_keys.contains(&key) {
             let mut err = validator::ValidationError::new("duplicate_sub_unit_key");
-            err.message = Some(format!(
-                "Duplicate sub-unit key '{}' (from label '{}')",
-                key, item.label
-            ).into());
+            err.message = Some(
+                format!(
+                    "Duplicate sub-unit key '{}' (from label '{}')",
+                    key, item.label
+                )
+                .into(),
+            );
             return Err(err);
         }
         seen_keys.insert(key);
@@ -41,10 +44,13 @@ fn validate_sub_units_config(config: &SubUnitsConfig) -> Result<(), validator::V
         let key = item.get_key();
         if key.is_empty() || !crate::python::identifier::is_valid_python_identifier(&key) {
             let mut err = validator::ValidationError::new("invalid_sub_unit_key");
-            err.message = Some(format!(
-                "Sub-unit key '{}' (from label '{}') is not a valid Python identifier",
-                key, item.label
-            ).into());
+            err.message = Some(
+                format!(
+                    "Sub-unit key '{}' (from label '{}') is not a valid Python identifier",
+                    key, item.label
+                )
+                .into(),
+            );
             return Err(err);
         }
     }
@@ -210,7 +216,6 @@ where
     }
 }
 
-
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "lowercase")]
 pub enum PhaseStage {
@@ -261,7 +266,11 @@ pub struct ProcedureYaml {
     #[serde(deserialize_with = "serde_trim::string_trim")]
     pub version: String,
 
-    #[serde(default, skip_serializing_if = "String::is_empty", deserialize_with = "serde_trim::string_trim")]
+    #[serde(
+        default,
+        skip_serializing_if = "String::is_empty",
+        deserialize_with = "serde_trim::string_trim"
+    )]
     pub description: String,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -416,6 +425,11 @@ pub struct UnitFieldConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub placeholder: Option<String>,
 
+    /// Helper text shown below the field label (parity with the main
+    /// engine's UnitFieldConfig)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+
     /// Minimum length for the field value
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min_length: Option<usize>,
@@ -434,6 +448,7 @@ impl Default for UnitFieldConfig {
         Self {
             placeholder: None,
             default_value: None,
+            description: None,
             min_length: None,
             max_length: None,
             pattern: None,
@@ -499,6 +514,35 @@ impl validator::Validate for SubUnitsConfig {
     }
 }
 
+/// Validate metadata keys against the server-side contract:
+/// `^[a-zA-Z0-9_.:+-]+$`, 1..=40 chars, max 50 keys per map.
+pub fn validate_metadata_keys<'a>(
+    keys: impl Iterator<Item = &'a str>,
+    ctx: &str,
+) -> Result<(), String> {
+    let mut count = 0usize;
+    for key in keys {
+        count += 1;
+        if key.is_empty() || key.len() > 40 {
+            return Err(format!(
+                "{ctx} key '{key}' must be between 1 and 40 characters"
+            ));
+        }
+        if !key
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | ':' | '+' | '-'))
+        {
+            return Err(format!(
+                "{ctx} key '{key}' is invalid: only letters, digits and _ . : + - are allowed"
+            ));
+        }
+    }
+    if count > 50 {
+        return Err(format!("{ctx} is limited to 50 keys (found {count})"));
+    }
+    Ok(())
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, Default, Validate, specta::Type)]
 pub struct UnitConfig {
     /// When true, automatically submit unit identification using default_value fields.
@@ -526,6 +570,13 @@ pub struct UnitConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[validate(nested)]
     pub sub_units: Option<SubUnitsConfig>,
+
+    /// Operator-prompted unit metadata fields, keyed by metadata key.
+    /// Each field renders as a text input in the identify form
+    /// (alphabetical order) and its value is stored on the unit.
+    /// Values are always optional — blank input means the key is absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<std::collections::BTreeMap<String, UnitFieldConfig>>,
 }
 
 impl UnitConfig {
@@ -607,7 +658,6 @@ impl ExecutionConfig {
                         ));
                     }
                 }
-
             }
         }
 
@@ -700,7 +750,11 @@ pub struct PlugDefinitionYaml {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scope: Option<Scope>,
     pub python: PythonSpec,
-    #[serde(default, skip_serializing_if = "String::is_empty", deserialize_with = "serde_trim::string_trim")]
+    #[serde(
+        default,
+        skip_serializing_if = "String::is_empty",
+        deserialize_with = "serde_trim::string_trim"
+    )]
     pub description: String,
     /// Keyword arguments passed to the plug class `__init__` at instantiation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -711,7 +765,10 @@ pub struct PlugDefinitionYaml {
 #[derive(Debug, Validate, Clone, Serialize, specta::Type)]
 #[serde(rename_all = "snake_case")]
 pub struct PlugDefinition {
-    #[validate(length(min = 1, max = 100), custom(function = "validate_python_identifier"))]
+    #[validate(
+        length(min = 1, max = 100),
+        custom(function = "validate_python_identifier")
+    )]
     pub key: String,
 
     #[validate(length(min = 1, max = 100))]
@@ -733,9 +790,9 @@ pub struct PlugDefinition {
 
 impl From<PlugDefinitionYaml> for PlugDefinition {
     fn from(yaml: PlugDefinitionYaml) -> Self {
-        let key = yaml.key.unwrap_or_else(|| {
-            crate::python::identifier::to_python_identifier(&yaml.name)
-        });
+        let key = yaml
+            .key
+            .unwrap_or_else(|| crate::python::identifier::to_python_identifier(&yaml.name));
 
         PlugDefinition {
             key,
@@ -752,7 +809,11 @@ impl PlugDefinition {
     pub fn to_yaml(&self) -> PlugDefinitionYaml {
         let auto_key = crate::python::identifier::to_python_identifier(&self.name);
         PlugDefinitionYaml {
-            key: if self.key != auto_key { Some(self.key.clone()) } else { None },
+            key: if self.key != auto_key {
+                Some(self.key.clone())
+            } else {
+                None
+            },
             name: self.name.clone(),
             scope: Some(self.scope),
             python: self.python.clone(),
@@ -821,7 +882,11 @@ impl PythonSpec {
         // Windows paths have a drive letter followed by colon, so we may have 3 parts
         let (path_part, name_part) = if parts.len() == 3
             && parts[0].len() == 1
-            && parts[0].chars().next().map(|c| c.is_ascii_alphabetic()).unwrap_or(false)
+            && parts[0]
+                .chars()
+                .next()
+                .map(|c| c.is_ascii_alphabetic())
+                .unwrap_or(false)
         {
             // Windows absolute path: "C:/path/file.py:func" -> ["C", "/path/file.py", "func"]
             let path = format!("{}:{}", parts[0], parts[1]);
@@ -956,7 +1021,11 @@ pub struct PhaseDefinitionYaml {
     pub python: Option<PythonSpec>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub executable: Option<ExecutableConfig>,
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "serde_trim::option_string_trim")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "serde_trim::option_string_trim"
+    )]
     pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub measurements: Vec<MeasurementSpecYaml>,
@@ -985,7 +1054,10 @@ pub struct PhaseDefinitionYaml {
 #[derive(Debug, Validate, Clone, Serialize, specta::Type)]
 #[serde(rename_all = "snake_case")]
 pub struct PhaseDefinition {
-    #[validate(length(min = 1, max = 100), custom(function = "validate_python_identifier"))]
+    #[validate(
+        length(min = 1, max = 100),
+        custom(function = "validate_python_identifier")
+    )]
     pub key: String,
 
     #[validate(length(min = 1, max = 100))]
@@ -1044,9 +1116,9 @@ pub struct PhaseDefinition {
 
 impl From<PhaseDefinitionYaml> for PhaseDefinition {
     fn from(yaml: PhaseDefinitionYaml) -> Self {
-        let key = yaml.key.unwrap_or_else(|| {
-            crate::python::identifier::to_python_identifier(&yaml.name)
-        });
+        let key = yaml
+            .key
+            .unwrap_or_else(|| crate::python::identifier::to_python_identifier(&yaml.name));
 
         PhaseDefinition {
             key,
@@ -1071,7 +1143,11 @@ impl PhaseDefinition {
     pub fn to_yaml(&self) -> PhaseDefinitionYaml {
         let auto_key = crate::python::identifier::to_python_identifier(&self.name);
         PhaseDefinitionYaml {
-            key: if self.key != auto_key { Some(self.key.clone()) } else { None },
+            key: if self.key != auto_key {
+                Some(self.key.clone())
+            } else {
+                None
+            },
             name: self.name.clone(),
             scope: self.scope,
             python: self.python.clone(),
@@ -1115,7 +1191,6 @@ impl PhaseDefinition {
     pub fn get_display_name(&self) -> String {
         self.name.clone()
     }
-
 
     pub fn validate_single_runtime(&self) -> Result<(), String> {
         let has_python = self.python.is_some();
@@ -1330,7 +1405,11 @@ pub struct AggregationSpec {
     pub outcome: Option<ValidatorOutcome>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub value: Option<AggregationValue>,
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "serde_trim::option_string_trim")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "serde_trim::option_string_trim"
+    )]
     pub unit: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub validators: Option<Vec<ValidatorSpec>>,
@@ -1347,17 +1426,33 @@ pub enum AxisData {
 pub struct AxisSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub data: Option<AxisData>,
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "serde_trim::option_string_trim")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "serde_trim::option_string_trim"
+    )]
     pub unit: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "serde_trim::option_string_trim")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "serde_trim::option_string_trim"
+    )]
     pub legend: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "serde_trim::option_string_trim")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "serde_trim::option_string_trim"
+    )]
     pub key: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub aggregations: Option<Vec<AggregationSpec>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub validators: Option<Vec<ValidatorSpec>>,
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "serde_trim::option_string_trim")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "serde_trim::option_string_trim"
+    )]
     pub description: Option<String>,
 }
 
@@ -1369,13 +1464,27 @@ impl serde::Serialize for AxisSpec {
         use serde::ser::SerializeStruct;
         // Count non-None fields for struct size hint
         let mut count = 0;
-        if self.data.is_some() { count += 1; }
-        if self.get_key().is_some() { count += 1; }
-        if self.get_legend().is_some() { count += 1; }
-        if self.unit.is_some() { count += 1; }
-        if self.aggregations.is_some() { count += 1; }
-        if self.validators.is_some() { count += 1; }
-        if self.description.is_some() { count += 1; }
+        if self.data.is_some() {
+            count += 1;
+        }
+        if self.get_key().is_some() {
+            count += 1;
+        }
+        if self.get_legend().is_some() {
+            count += 1;
+        }
+        if self.unit.is_some() {
+            count += 1;
+        }
+        if self.aggregations.is_some() {
+            count += 1;
+        }
+        if self.validators.is_some() {
+            count += 1;
+        }
+        if self.description.is_some() {
+            count += 1;
+        }
 
         let mut state = serializer.serialize_struct("AxisSpec", count)?;
         if let Some(ref data) = self.data {
@@ -1456,7 +1565,11 @@ impl AxisSpec {
 pub struct MultiDimensionalSpec {
     pub x_axis: AxisSpec,
     pub y_axis: Vec<AxisSpec>,
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "serde_trim::option_string_trim")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "serde_trim::option_string_trim"
+    )]
     pub title: Option<String>,
 }
 
@@ -1468,15 +1581,27 @@ pub struct MeasurementSpecYaml {
     pub key: Option<String>,
     #[serde(deserialize_with = "serde_trim::string_trim")]
     pub name: String,
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "serde_trim::option_string_trim")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "serde_trim::option_string_trim"
+    )]
     pub unit: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub validators: Option<Vec<ValidatorSpec>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub aggregations: Option<Vec<AggregationSpec>>,
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "serde_trim::option_string_trim")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "serde_trim::option_string_trim"
+    )]
     pub description: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "serde_trim::option_string_trim")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "serde_trim::option_string_trim"
+    )]
     pub title: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub x_axis: Option<AxisSpec>,
@@ -1488,7 +1613,10 @@ pub struct MeasurementSpecYaml {
 #[derive(Debug, Validate, Clone, Serialize, specta::Type)]
 #[serde(rename_all = "snake_case")]
 pub struct MeasurementSpec {
-    #[validate(length(min = 1, max = 100), custom(function = "validate_python_identifier"))]
+    #[validate(
+        length(min = 1, max = 100),
+        custom(function = "validate_python_identifier")
+    )]
     pub key: String,
 
     #[validate(length(min = 1, max = 100))]
@@ -1527,9 +1655,9 @@ impl From<MeasurementSpecYaml> for MeasurementSpec {
         } else {
             trimmed.to_string()
         };
-        let key = yaml.key.unwrap_or_else(|| {
-            crate::python::identifier::to_python_identifier(&name)
-        });
+        let key = yaml
+            .key
+            .unwrap_or_else(|| crate::python::identifier::to_python_identifier(&name));
 
         MeasurementSpec {
             key,
@@ -1549,7 +1677,11 @@ impl MeasurementSpec {
     pub fn to_yaml(&self) -> MeasurementSpecYaml {
         let auto_key = crate::python::identifier::to_python_identifier(&self.name);
         MeasurementSpecYaml {
-            key: if self.key != auto_key { Some(self.key.clone()) } else { None },
+            key: if self.key != auto_key {
+                Some(self.key.clone())
+            } else {
+                None
+            },
             name: self.name.clone(),
             unit: self.unit.clone(),
             validators: self.validators.clone(),
@@ -1676,7 +1808,9 @@ impl From<UIComponentYaml> for UIComponent {
     fn from(yaml: UIComponentYaml) -> Self {
         let type_str = format!("{:?}", yaml.component_type);
         let base_name = yaml.label.as_deref().unwrap_or(&type_str);
-        let key = yaml.key.unwrap_or_else(|| crate::python::identifier::to_python_identifier(base_name));
+        let key = yaml
+            .key
+            .unwrap_or_else(|| crate::python::identifier::to_python_identifier(base_name));
 
         UIComponent {
             // Core Identity
@@ -1752,7 +1886,10 @@ pub struct UIComponent {
     #[serde(rename = "type")]
     pub component_type: UIComponentType,
 
-    #[validate(length(min = 1, max = 100), custom(function = "validate_python_identifier"))]
+    #[validate(
+        length(min = 1, max = 100),
+        custom(function = "validate_python_identifier")
+    )]
     pub key: String,
 
     // Display/UI
@@ -1849,7 +1986,11 @@ impl UIComponent {
 
         UIComponentYaml {
             component_type: self.component_type.clone(),
-            key: if self.key != auto_key { Some(self.key.clone()) } else { None },
+            key: if self.key != auto_key {
+                Some(self.key.clone())
+            } else {
+                None
+            },
             label: self.label.clone(),
             description: self.description.clone(),
             placeholder: self.placeholder.clone(),

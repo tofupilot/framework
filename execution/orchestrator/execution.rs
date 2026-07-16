@@ -38,13 +38,17 @@ impl Orchestrator {
 
             // Collect completed job results relevant to this slot for unit info merging.
             // Keyed by phase_key — keeps only the highest retry_count per phase.
-            let mut unit_results_by_phase: std::collections::HashMap<String, &crate::execution::job::JobResult> =
-                std::collections::HashMap::new();
+            let mut unit_results_by_phase: std::collections::HashMap<
+                String,
+                &crate::execution::job::JobResult,
+            > = std::collections::HashMap::new();
             // Separately track the first attempt's input_unit_info per phase (lowest retry_count).
             // Used as the diff baseline so retries that set the same value as a prior attempt
             // are still detected as intentional changes.
-            let mut first_input_by_phase: std::collections::HashMap<String, (usize, Option<crate::execution::types::UnitInfo>)> =
-                std::collections::HashMap::new();
+            let mut first_input_by_phase: std::collections::HashMap<
+                String,
+                (usize, Option<crate::execution::types::UnitInfo>),
+            > = std::collections::HashMap::new();
 
             for (job_id, info) in &state.job_info {
                 // Include results from same slot or shared phases
@@ -66,7 +70,10 @@ impl Orchestrator {
                                 .map(|(c, _)| *c)
                                 .unwrap_or(usize::MAX);
                             if result.retry_count <= prev_min {
-                                first_input_by_phase.insert(info.phase_key.clone(), (result.retry_count, result.input_unit_info.clone()));
+                                first_input_by_phase.insert(
+                                    info.phase_key.clone(),
+                                    (result.retry_count, result.input_unit_info.clone()),
+                                );
                             }
                         }
 
@@ -103,7 +110,8 @@ impl Orchestrator {
             // Same logic as reports/mod.rs finalize_report: only update fields that
             // differ from the initial value (so phases can't accidentally reset fields)
             let initial = if let Some(slot_id) = &job.slot_id {
-                self.initial_unit_infos.get(slot_id.as_str())
+                self.initial_unit_infos
+                    .get(slot_id.as_str())
                     .or_else(|| self.initial_unit_infos.values().next())
                     .cloned()
             } else {
@@ -121,50 +129,86 @@ impl Orchestrator {
                         // Compare against the FIRST attempt's input, not the final retry's input.
                         // This ensures that when a retry sets the same value as a previous attempt,
                         // it's still detected as a change relative to what the phase originally received.
-                        let first_input = first_input_by_phase.get(&phase_key).and_then(|(_, inp)| inp.as_ref());
+                        let first_input = first_input_by_phase
+                            .get(&phase_key)
+                            .and_then(|(_, inp)| inp.as_ref());
                         let input = first_input.or(result.input_unit_info.as_ref());
                         let input_serial = input.and_then(|u| u.serial_number.clone());
                         let input_part = input.and_then(|u| u.part_number.clone());
                         let input_revision = input.and_then(|u| u.revision_number.clone());
                         let input_batch = input.and_then(|u| u.batch_number.clone());
-                        let input_sub_units = input.and_then(|u| u.sub_units.clone()).unwrap_or_default();
+                        let input_sub_units =
+                            input.and_then(|u| u.sub_units.clone()).unwrap_or_default();
 
                         merged = Some(match merged {
                             Some(base) => {
-                                let merged_sub_units = match (base.sub_units, phase_unit.sub_units.clone()) {
-                                    (Some(mut base_subs), Some(phase_subs)) => {
-                                        for (key, value) in phase_subs {
-                                            if input_sub_units.get(&key) != Some(&value) {
-                                                base_subs.insert(key, value);
+                                let merged_sub_units =
+                                    match (base.sub_units, phase_unit.sub_units.clone()) {
+                                        (Some(mut base_subs), Some(phase_subs)) => {
+                                            for (key, value) in phase_subs {
+                                                if input_sub_units.get(&key) != Some(&value) {
+                                                    base_subs.insert(key, value);
+                                                }
+                                            }
+                                            Some(base_subs)
+                                        }
+                                        (Some(base_subs), None) => Some(base_subs),
+                                        (None, Some(phase_subs)) => {
+                                            let filtered: std::collections::HashMap<
+                                                String,
+                                                String,
+                                            > = phase_subs
+                                                .into_iter()
+                                                .filter(|(k, v)| input_sub_units.get(k) != Some(v))
+                                                .collect();
+                                            if filtered.is_empty() {
+                                                None
+                                            } else {
+                                                Some(filtered)
                                             }
                                         }
-                                        Some(base_subs)
-                                    }
-                                    (Some(base_subs), None) => Some(base_subs),
-                                    (None, Some(phase_subs)) => {
-                                        let filtered: std::collections::HashMap<String, String> = phase_subs
-                                            .into_iter()
-                                            .filter(|(k, v)| input_sub_units.get(k) != Some(v))
-                                            .collect();
-                                        if filtered.is_empty() { None } else { Some(filtered) }
-                                    }
-                                    (None, None) => None,
-                                };
+                                        (None, None) => None,
+                                    };
 
-                                let merge_field = |phase_val: &Option<String>, base_val: Option<String>, input_val: &Option<String>| -> Option<String> {
-                                    match phase_val {
-                                        Some(v) if phase_val != input_val => Some(v.clone()),
-                                        _ => base_val,
-                                    }
-                                };
+                                let merge_field =
+                                    |phase_val: &Option<String>,
+                                     base_val: Option<String>,
+                                     input_val: &Option<String>|
+                                     -> Option<String> {
+                                        match phase_val {
+                                            Some(v) if phase_val != input_val => Some(v.clone()),
+                                            _ => base_val,
+                                        }
+                                    };
 
                                 crate::execution::types::UnitInfo {
-                                    serial_number: merge_field(&phase_unit.serial_number, base.serial_number, &input_serial),
-                                    part_number: merge_field(&phase_unit.part_number, base.part_number, &input_part),
-                                    revision_number: merge_field(&phase_unit.revision_number, base.revision_number, &input_revision),
-                                    batch_number: merge_field(&phase_unit.batch_number, base.batch_number, &input_batch),
+                                    serial_number: merge_field(
+                                        &phase_unit.serial_number,
+                                        base.serial_number,
+                                        &input_serial,
+                                    ),
+                                    part_number: merge_field(
+                                        &phase_unit.part_number,
+                                        base.part_number,
+                                        &input_part,
+                                    ),
+                                    revision_number: merge_field(
+                                        &phase_unit.revision_number,
+                                        base.revision_number,
+                                        &input_revision,
+                                    ),
+                                    batch_number: merge_field(
+                                        &phase_unit.batch_number,
+                                        base.batch_number,
+                                        &input_batch,
+                                    ),
                                     sub_units: merged_sub_units,
                                     status: phase_unit.status.clone(),
+                                    // Operator-entered metadata rides the base
+                                    // (identify-time) info; phases don't set it
+                                    // via unit_json (Python metadata flows
+                                    // through unit_metadata_json instead).
+                                    metadata: phase_unit.metadata.clone().or(base.metadata),
                                 }
                             }
                             None => phase_unit.clone(),
@@ -202,8 +246,8 @@ impl Orchestrator {
                             .iter()
                             .map(|m| {
                                 if let Some(ref aggregations) = m.aggregations {
-                                    let agg_json = serde_json::to_value(aggregations)
-                                        .unwrap_or_default();
+                                    let agg_json =
+                                        serde_json::to_value(aggregations).unwrap_or_default();
                                     (
                                         m.name.clone(),
                                         serde_json::json!({
@@ -240,7 +284,10 @@ impl Orchestrator {
             // Check already tracked jobs for this phase
             for info in state.job_info.values() {
                 if info.phase_key == job.phase_key {
-                    let slot = info.slot_id.clone().unwrap_or_else(|| "<shared>".to_string());
+                    let slot = info
+                        .slot_id
+                        .clone()
+                        .unwrap_or_else(|| "<shared>".to_string());
                     if !phase_slots.contains(&slot) {
                         phase_slots.push(slot);
                     }
@@ -287,7 +334,9 @@ impl Orchestrator {
         // Store job info when starting (needed for shutdown event emission)
         {
             let mut state = self.state.write().await;
-            state.job_info.insert(job.id, crate::execution::state::JobInfo::from_job(&job));
+            state
+                .job_info
+                .insert(job.id, crate::execution::state::JobInfo::from_job(&job));
         }
 
         // Emit job started event
@@ -438,7 +487,8 @@ impl Orchestrator {
                     Ok(ports) => {
                         log::debug!(
                             "Started plug services for job {}: {:?}",
-                            original_job.id, ports
+                            original_job.id,
+                            ports
                         );
 
                         // Ready events now emitted at plug level in ResourceManager
@@ -484,7 +534,9 @@ impl Orchestrator {
                         {
                             let workers_check = workers.read().await;
                             if workers_check.is_empty() {
-                                log::debug!("Skipping timeout handling - orchestrator already shut down");
+                                log::debug!(
+                                    "Skipping timeout handling - orchestrator already shut down"
+                                );
                                 return;
                             }
                         }
@@ -500,10 +552,7 @@ impl Orchestrator {
                         // We need to kill it because it won't see the interrupt while executing
                         let mut worker_mut = worker;
                         if let Err(kill_error) = worker_mut.shutdown_with_timeout(500).await {
-                            log::warn!(
-                                "Failed to kill worker after timeout: {}",
-                                kill_error
-                            );
+                            log::warn!("Failed to kill worker after timeout: {}", kill_error);
                         }
 
                         // Check if orchestrator is still active before creating replacement worker
@@ -523,7 +572,8 @@ impl Orchestrator {
                         if let Err(start_error) = new_worker.start(app_handle.as_ref()).await {
                             log::debug!(
                                 "Failed to start replacement worker {}: {}",
-                                worker_id, start_error
+                                worker_id,
+                                start_error
                             );
                         }
 
@@ -582,10 +632,7 @@ impl Orchestrator {
                         } else {
                             drop(workers_check);
 
-                            log::warn!(
-                                "Worker {} crashed with IPC error, replacing...",
-                                worker_id
-                            );
+                            log::warn!("Worker {} crashed with IPC error, replacing...", worker_id);
 
                             // Get the worker from the array to take ownership
                             let mut crashed_worker = {
@@ -610,7 +657,8 @@ impl Orchestrator {
                             if let Err(start_error) = start_result {
                                 log::debug!(
                                     "Failed to start replacement worker {}: {}",
-                                    worker_id, start_error
+                                    worker_id,
+                                    start_error
                                 );
                             } else {
                                 // Replace the worker in the shared state
@@ -654,7 +702,8 @@ impl Orchestrator {
                 {
                     log::warn!(
                         "Failed to stop plug services for job {}: {}",
-                        original_job.id, e
+                        original_job.id,
+                        e
                     );
                 }
 
