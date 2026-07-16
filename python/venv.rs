@@ -1,6 +1,9 @@
 //! Venv operations: inspect, sync, delete, auto-resolve Python executable.
 
-use super::version_constraint::{compute_effective_constraint, parse_requires_python, ConstraintResult, RequiresPythonGuard, STUDIO_MIN_VERSION};
+use super::version_constraint::{
+    compute_effective_constraint, parse_requires_python, ConstraintResult, RequiresPythonGuard,
+    STUDIO_MIN_VERSION,
+};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::path::{Path, PathBuf};
@@ -10,7 +13,7 @@ use tauri_plugin_shell::ShellExt;
 use tauri_specta::Event;
 use toml_edit::{DocumentMut, Item, Table};
 
-const STUDIO_DEPENDENCIES: &[&str] = &["grpcio>=1.76.0", "portpicker", "protobuf"];
+const STUDIO_DEPENDENCIES: &[&str] = &["grpcio>=1.76.0", "portpicker", "protobuf", "debugpy"];
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type, tauri_specta::Event)]
 pub struct PythonInstallOutputEvent(pub String);
@@ -114,7 +117,6 @@ fn ensure_manifest_with_studio_deps_impl(project_path: &Path) -> Result<(), Stri
     Ok(())
 }
 
-
 #[cfg(test)]
 pub(crate) fn find_python_executable(project_path: &Path) -> Option<PathBuf> {
     find_python_executable_impl(project_path)
@@ -180,19 +182,24 @@ async fn inspect_venv(
 
         let output = sidecar
             .args(&["pip", "list", "--format=json"])
-            .env("VIRTUAL_ENV", venv_info.venv_path.to_string_lossy().as_ref())
+            .env(
+                "VIRTUAL_ENV",
+                venv_info.venv_path.to_string_lossy().as_ref(),
+            )
             .current_dir(procedure_dir)
             .output()
             .await
             .ok()?;
 
         if !output.status.success() {
-            log::warn!("UV pip list failed: {}", String::from_utf8_lossy(&output.stderr));
+            log::warn!(
+                "UV pip list failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
             return None;
         }
 
-        let packages: Vec<serde_json::Value> =
-            serde_json::from_slice(&output.stdout).ok()?;
+        let packages: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).ok()?;
 
         Some(
             packages
@@ -264,7 +271,12 @@ pub async fn sync_python(app: AppHandle, procedure_dir: String) -> Result<(), St
     }
 
     let venv_name = find_python_executable(path)
-        .and_then(|p| p.parent()?.parent()?.file_name().map(|n| n.to_string_lossy().to_string()))
+        .and_then(|p| {
+            p.parent()?
+                .parent()?
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+        })
         .unwrap_or_else(|| ".venv".to_string());
 
     log::info!("Syncing dependencies for venv: {}", venv_name);
@@ -282,7 +294,10 @@ pub async fn sync_python(app: AppHandle, procedure_dir: String) -> Result<(), St
         }
     };
 
-    log::info!("Using effective Python constraint: {}", effective_constraint);
+    log::info!(
+        "Using effective Python constraint: {}",
+        effective_constraint
+    );
 
     // Temporarily update requires-python for UV resolution (restored on drop)
     let _guard = RequiresPythonGuard::new(path, &effective_constraint)?;
@@ -291,7 +306,13 @@ pub async fn sync_python(app: AppHandle, procedure_dir: String) -> Result<(), St
         .shell()
         .sidecar("uv")
         .map_err(|e| format!("UV sidecar not found: {}", e))?
-        .args(&["sync", "--group", "studio", "--python", &effective_constraint])
+        .args(&[
+            "sync",
+            "--group",
+            "studio",
+            "--python",
+            &effective_constraint,
+        ])
         .env("UV_PROJECT_ENVIRONMENT", &venv_name)
         .current_dir(path)
         .spawn()
@@ -354,7 +375,10 @@ pub async fn resolve_python_internal(
         }
     };
 
-    log::info!("Running uv sync --group studio --python {}", effective_constraint);
+    log::info!(
+        "Running uv sync --group studio --python {}",
+        effective_constraint
+    );
 
     // Temporarily update requires-python for UV resolution (restored on drop)
     let _guard = RequiresPythonGuard::new(project_path, &effective_constraint)?;
@@ -365,7 +389,13 @@ pub async fn resolve_python_internal(
             .shell()
             .sidecar("uv")
             .map_err(|e| format!("UV binary not found: {}", e))?
-            .args(&["sync", "--group", "studio", "--python", &effective_constraint])
+            .args(&[
+                "sync",
+                "--group",
+                "studio",
+                "--python",
+                &effective_constraint,
+            ])
             .env("UV_PROJECT_ENVIRONMENT", ".venv")
             .current_dir(project_path)
             .output()
@@ -375,7 +405,13 @@ pub async fn resolve_python_internal(
     } else {
         // CLI mode: use std::process::Command
         let output = std::process::Command::new("uv")
-            .args(["sync", "--group", "studio", "--python", &effective_constraint])
+            .args([
+                "sync",
+                "--group",
+                "studio",
+                "--python",
+                &effective_constraint,
+            ])
             .env("UV_PROJECT_ENVIRONMENT", ".venv")
             .current_dir(project_path)
             .output()
@@ -400,10 +436,6 @@ pub async fn resolve_python_internal(
     let python_path = find_python_executable(project_path)
         .ok_or_else(|| "Python executable not found after uv sync".to_string())?;
 
-    log::info!(
-        "Python ready at: {}",
-        python_path.display()
-    );
+    log::info!("Python ready at: {}", python_path.display());
     Ok(python_path.to_string_lossy().to_string())
 }
-

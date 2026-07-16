@@ -76,14 +76,23 @@ pub struct Worker {
     pub id: usize,
     inner: Arc<RwLock<Option<GrpcProcess<WorkerClient<Channel>>>>>,
     procedure_dir: PathBuf,
+    /// When true, the worker subprocess gets TP_DEBUG so tp_worker.py
+    /// starts the debugpy listener. Only pool workers set this; teardown
+    /// workers stay false (they run under a hard timeout).
+    debug: bool,
 }
 
 impl Worker {
     pub fn new(id: usize, procedure_dir: PathBuf) -> Self {
+        Self::new_with_debug(id, procedure_dir, false)
+    }
+
+    pub fn new_with_debug(id: usize, procedure_dir: PathBuf, debug: bool) -> Self {
         Self {
             id,
             inner: Arc::new(RwLock::new(None)),
             procedure_dir,
+            debug,
         }
     }
 
@@ -144,12 +153,17 @@ impl Worker {
 
         let worker_id = self.id;
 
+        let mut env_vars = vec![("WORKER_ID".to_string(), worker_id.to_string())];
+        if self.debug {
+            env_vars.push(("TP_DEBUG".to_string(), "1".to_string()));
+        }
+
         let process = GrpcProcess::spawn(
             python_cmd,
             worker_script,
             vec![abs_procedure_dir.to_string_lossy().to_string()],
             Some(&abs_procedure_dir),
-            vec![("WORKER_ID".to_string(), worker_id.to_string())],
+            env_vars,
             Some(Box::new(move |stderr| {
                 Self::spawn_stderr_reader_static(worker_id, stderr);
             })),

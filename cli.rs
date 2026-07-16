@@ -79,6 +79,7 @@ pub fn run(procedure_path: PathBuf) {
             execution_id.clone(),
             run_id,
             procedure_def.clone(),
+            false,
         );
 
         if let Err(e) = orchestrator.initialize().await {

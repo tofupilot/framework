@@ -161,6 +161,9 @@ pub struct Orchestrator {
     pub(super) start_time: Option<chrono::DateTime<chrono::Utc>>,
     pub(super) end_time: Option<chrono::DateTime<chrono::Utc>>,
     pub(super) initial_unit_infos: HashMap<String, crate::execution::types::UnitInfo>,
+    /// Debug run: pool workers get TP_DEBUG and the Rust-side phase
+    /// timeout wrapper is skipped so breakpoint pauses aren't killed.
+    pub(super) debug: bool,
 }
 
 pub struct JobStatusResolver;
@@ -213,10 +216,11 @@ impl Orchestrator {
         execution_id: String,
         run_id: String,
         procedure_definition: ProcedureDefinition,
+        debug: bool,
     ) -> Self {
         let mut workers = Vec::new();
         for i in 0..worker_count {
-            workers.push(Worker::new(i, procedure_dir.clone()));
+            workers.push(Worker::new_with_debug(i, procedure_dir.clone(), debug));
         }
 
         let (tx, rx) = mpsc::unbounded_channel();
@@ -243,10 +247,14 @@ impl Orchestrator {
             start_time: None,
             end_time: None,
             initial_unit_infos: HashMap::new(),
+            debug,
         }
     }
 
-    pub fn set_initial_unit_infos(&mut self, unit_infos: HashMap<String, crate::execution::types::UnitInfo>) {
+    pub fn set_initial_unit_infos(
+        &mut self,
+        unit_infos: HashMap<String, crate::execution::types::UnitInfo>,
+    ) {
         self.initial_unit_infos = unit_infos;
     }
 

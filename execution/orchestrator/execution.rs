@@ -18,6 +18,12 @@ use crate::plugs::guard::ResourceManagerExt;
 use super::orchestrator::Orchestrator;
 use super::orchestrator::{JobCompletionEvent, JobProgress};
 
+/// The phase timeout that actually applies. Debug mode returns `None`
+/// (timeout disabled so a breakpoint pause isn't killed). Pure/testable.
+fn effective_timeout_ms(timeout_ms: Option<u64>, debug: bool) -> Option<u64> {
+    timeout_ms.filter(|_| !debug)
+}
+
 impl Orchestrator {
     pub(super) async fn spawn_job_execution(
         &self,
@@ -374,6 +380,9 @@ impl Orchestrator {
         // Get all plug configs for potential slot creation
         let _all_plug_configs = self.get_all_plug_configs(&self.procedure_definition);
 
+        // Capture debug flag before the spawn (self doesn't cross into the task).
+        let debug = self.debug;
+
         // Spawn task to execute job
         tokio::spawn(async move {
             // Check if workers still exist (orchestrator not shut down)
@@ -399,34 +408,36 @@ impl Orchestrator {
                 );
             }
 
-            // Spawn a warning task only if timeout is set
-            let warning_handle = if let Some(timeout_ms) = original_job.timeout_ms {
-                let warning_time_ms = timeout_ms * timeouts::TIMEOUT_WARNING_THRESHOLD / 100;
-                let phase_name_clone = original_job.phase_name.clone();
-                let slot_id_clone = original_job.slot_id.clone();
-                let workers_for_warning = workers.clone();
+            // Spawn a warning task only if the timeout actually applies
+            // (debug mode disables it, matching the timeout wrapper).
+            let warning_handle =
+                if let Some(timeout_ms) = effective_timeout_ms(original_job.timeout_ms, debug) {
+                    let warning_time_ms = timeout_ms * timeouts::TIMEOUT_WARNING_THRESHOLD / 100;
+                    let phase_name_clone = original_job.phase_name.clone();
+                    let slot_id_clone = original_job.slot_id.clone();
+                    let workers_for_warning = workers.clone();
 
-                Some(tokio::spawn(async move {
-                    tokio::time::sleep(std::time::Duration::from_millis(warning_time_ms)).await;
+                    Some(tokio::spawn(async move {
+                        tokio::time::sleep(std::time::Duration::from_millis(warning_time_ms)).await;
 
-                    // Check if orchestrator still active before warning
-                    let workers_check = workers_for_warning.read().await;
-                    if workers_check.is_empty() {
-                        return;
-                    }
-                    drop(workers_check);
+                        // Check if orchestrator still active before warning
+                        let workers_check = workers_for_warning.read().await;
+                        if workers_check.is_empty() {
+                            return;
+                        }
+                        drop(workers_check);
 
-                    log::warn!(
-                        "Phase '{}' for {} has been running for {}ms, will timeout in {}ms",
-                        phase_name_clone,
-                        slot_id_clone.as_deref().unwrap_or("<shared>"),
-                        warning_time_ms,
-                        timeout_ms - warning_time_ms
-                    );
-                }))
-            } else {
-                None
-            };
+                        log::warn!(
+                            "Phase '{}' for {} has been running for {}ms, will timeout in {}ms",
+                            phase_name_clone,
+                            slot_id_clone.as_deref().unwrap_or("<shared>"),
+                            warning_time_ms,
+                            timeout_ms - warning_time_ms
+                        );
+                    }))
+                } else {
+                    None
+                };
 
             // Get the report managers for recording phase results
             // For shared phases: record in ALL slot report managers
@@ -504,8 +515,11 @@ impl Orchestrator {
                 HashMap::new()
             };
 
-            // Execute job with optional timeout
-            let result = if let Some(timeout_ms) = original_job.timeout_ms {
+            // Execute job with optional timeout. Debug mode disables the
+            // timeout so a breakpoint pause isn't killed as a hung worker.
+            let result = if let Some(timeout_ms) =
+                effective_timeout_ms(original_job.timeout_ms, debug)
+            {
                 // With timeout
                 let timeout_duration = std::time::Duration::from_millis(timeout_ms);
                 match tokio::time::timeout(
@@ -717,5 +731,25 @@ impl Orchestrator {
         });
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod debug_timeout_tests {
+    use super::effective_timeout_ms;
+
+    #[test]
+    fn normal_run_keeps_timeout() {
+        assert_eq!(effective_timeout_ms(Some(5000), false), Some(5000));
+    }
+
+    #[test]
+    fn debug_run_disables_timeout() {
+        assert_eq!(effective_timeout_ms(Some(5000), true), None);
+    }
+
+    #[test]
+    fn no_timeout_stays_none() {
+        assert_eq!(effective_timeout_ms(None, true), None);
     }
 }

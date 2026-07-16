@@ -176,8 +176,10 @@ pub async fn execute_parallel_runs(
     worker_count_override: Option<u32>,
     strategy: Option<String>,
     prefill_units: Option<HashMap<String, HashMap<String, String>>>,
+    debug: Option<bool>,
     orchestrator_state: State<'_, OrchestratorState>,
 ) -> Result<String, String> {
+    let debug = debug.unwrap_or(false);
     let procedure_file_buf = PathBuf::from(&procedure_file);
     let procedure_dir_path = PathBuf::from(&procedure_dir);
 
@@ -205,11 +207,17 @@ pub async fn execute_parallel_runs(
     let execution_uuid = uuid::Uuid::new_v4();
     let execution_id_str = execution_uuid.to_string();
 
-    // Determine worker count: UI override > YAML > CPU count (default)
-    let worker_count = worker_count_override
-        .map(|c| c as usize)
-        .or_else(|| procedure_def.execution.as_ref().map(|e| e.workers))
-        .unwrap_or_else(num_cpus::get);
+    // Determine worker count: UI override > YAML > CPU count (default).
+    // Debug mode forces a single worker so the fixed debug port doesn't
+    // collide across the pool.
+    let worker_count = if debug {
+        1
+    } else {
+        worker_count_override
+            .map(|c| c as usize)
+            .or_else(|| procedure_def.execution.as_ref().map(|e| e.workers))
+            .unwrap_or_else(num_cpus::get)
+    };
 
     log::info!(
         "Starting parallel initialization for execution {}",
@@ -447,6 +455,7 @@ pub async fn execute_parallel_runs(
             execution_id_for_init.clone(),
             execution_id_for_init.clone(),
             procedure_def_for_init,
+            debug,
         );
         orchestrator.set_app_handle(app_handle_for_init.clone());
 
