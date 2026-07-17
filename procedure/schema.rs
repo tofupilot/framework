@@ -1781,7 +1781,7 @@ pub struct UIComponentYaml {
     #[serde(default)]
     options: Option<Vec<SelectOption>>,
 
-    // Grid columns (for image_choice / image_checklist)
+    // Grid columns
     #[serde(default)]
     columns: Option<u32>,
 
@@ -1872,8 +1872,6 @@ pub enum UIComponentType {
     Multiselect,
     Checklist,
     Slider,
-    ImageChoice,
-    ImageChecklist,
     Text,
     Image,
     Progress,
@@ -1951,7 +1949,7 @@ pub struct UIComponent {
     #[validate(nested)]
     pub options: Option<Vec<SelectOption>>,
 
-    // Grid columns (for image_choice / image_checklist)
+    // Grid columns
     #[serde(skip_serializing_if = "Option::is_none")]
     pub columns: Option<u32>,
 
@@ -2081,20 +2079,6 @@ impl UIComponent {
     }
 
     pub fn validate_options_count(&self) -> Result<(), String> {
-        if matches!(
-            self.component_type,
-            UIComponentType::ImageChoice | UIComponentType::ImageChecklist
-        ) {
-            if let Some(opts) = &self.options {
-                if opts.len() > 12 {
-                    return Err(format!(
-                        "Component '{}' has {} options (max 12 for image_choice/image_checklist)",
-                        self.key,
-                        opts.len()
-                    ));
-                }
-            }
-        }
         Ok(())
     }
 }

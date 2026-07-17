@@ -46,8 +46,6 @@ fn convert_ui_component(proc_comp: &ProcedureUIComponent) -> UiComponent {
         crate::procedure::schema::UIComponentType::Multiselect => ComponentType::Multiselect,
         crate::procedure::schema::UIComponentType::Checklist => ComponentType::Checklist,
         crate::procedure::schema::UIComponentType::Slider => ComponentType::Slider,
-        crate::procedure::schema::UIComponentType::ImageChoice => ComponentType::ImageChoice,
-        crate::procedure::schema::UIComponentType::ImageChecklist => ComponentType::ImageChecklist,
         crate::procedure::schema::UIComponentType::Text => ComponentType::Text,
         crate::procedure::schema::UIComponentType::Image => ComponentType::Image,
         crate::procedure::schema::UIComponentType::Progress => ComponentType::Progress,

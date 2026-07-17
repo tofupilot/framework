@@ -52,8 +52,6 @@ impl UiComponent {
                 | ComponentType::Checklist
                 | ComponentType::Switch
                 | ComponentType::Slider
-                | ComponentType::ImageChoice
-                | ComponentType::ImageChecklist
         )
     }
 
@@ -96,7 +94,7 @@ pub struct UiComponent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub options: Option<Vec<UiOption>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub columns: Option<u32>, // Grid columns for image_choice / image_checklist
+    pub columns: Option<u32>, // Grid columns
     #[serde(skip_serializing_if = "Option::is_none")]
     pub width: Option<String>, // Width with unit (e.g., "50%", "100%")
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -168,8 +166,6 @@ pub enum ComponentType {
     Multiselect,
     Checklist,
     Slider,
-    ImageChoice,
-    ImageChecklist,
 
     // Display components (output only)
     Text,
@@ -192,8 +188,6 @@ impl ComponentType {
             "multiselect",
             "checklist",
             "slider",
-            "image_choice",
-            "image_checklist",
             // Display types
             "text",
             "image",
@@ -214,8 +208,6 @@ impl ComponentType {
             "checklist" => Some(ComponentType::Checklist),
             "switch" => Some(ComponentType::Switch),
             "slider" => Some(ComponentType::Slider),
-            "image_choice" => Some(ComponentType::ImageChoice),
-            "image_checklist" => Some(ComponentType::ImageChecklist),
 
             // Display types
             "text" => Some(ComponentType::Text),
@@ -238,8 +230,6 @@ impl ComponentType {
             ComponentType::Checklist => "checklist",
             ComponentType::Switch => "switch",
             ComponentType::Slider => "slider",
-            ComponentType::ImageChoice => "image_choice",
-            ComponentType::ImageChecklist => "image_checklist",
             ComponentType::Text => "text",
             ComponentType::Image => "image",
             ComponentType::Progress => "progress",
@@ -259,8 +249,6 @@ impl ComponentType {
                 | ComponentType::Checklist
                 | ComponentType::Switch
                 | ComponentType::Slider
-                | ComponentType::ImageChoice
-                | ComponentType::ImageChecklist
         )
     }
 }
