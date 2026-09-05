@@ -632,9 +632,70 @@ pub struct ExecutionConfig {
     #[serde(default = "default_stop")]
     pub on_first_failure: FirstFailureAction,
 
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        deserialize_with = "deserialize_slots"
+    )]
     #[validate(nested)]
     pub slots: Vec<SlotConfig>,
+}
+
+/// Cap on the `slots: N` integer shorthand: a typo must not spawn a job
+/// explosion. Explicit lists are uncapped, one line per slot is its own
+/// brake. The engine still bounds slots x phases at its job queue limit.
+const MAX_SLOT_COUNT_SHORTHAND: u64 = 1024;
+
+/// `slots:` accepts the explicit list or an integer shorthand
+/// (`slots: 80`), like GitLab's `parallel: N`. The shorthand expands to
+/// `slot_01..slot_NN` with ordinals zero-padded to the count, so
+/// lexicographic order equals numeric order everywhere downstream.
+/// A visitor rather than an untagged enum, so a bad list entry still
+/// reports its own error instead of "did not match any variant".
+fn deserialize_slots<'de, D>(deserializer: D) -> Result<Vec<SlotConfig>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct SlotsVisitor;
+
+    impl<'de> serde::de::Visitor<'de> for SlotsVisitor {
+        type Value = Vec<SlotConfig>;
+
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("a slot count or a list of slots")
+        }
+
+        fn visit_u64<E: serde::de::Error>(self, n: u64) -> Result<Self::Value, E> {
+            if n == 0 {
+                return Err(E::custom("execution.slots: count must be at least 1"));
+            }
+            if n > MAX_SLOT_COUNT_SHORTHAND {
+                return Err(E::custom(format!(
+                    "execution.slots: count {n} exceeds the maximum of {MAX_SLOT_COUNT_SHORTHAND}"
+                )));
+            }
+            let width = n.to_string().len();
+            Ok((1..=n)
+                .map(|i| SlotConfig {
+                    key: format!("slot_{i:0width$}"),
+                    name: format!("Slot {i}"),
+                })
+                .collect())
+        }
+
+        fn visit_i64<E: serde::de::Error>(self, n: i64) -> Result<Self::Value, E> {
+            if n < 1 {
+                return Err(E::custom("execution.slots: count must be at least 1"));
+            }
+            self.visit_u64(n as u64)
+        }
+
+        fn visit_seq<A: serde::de::SeqAccess<'de>>(self, seq: A) -> Result<Self::Value, A::Error> {
+            Vec::<SlotConfig>::deserialize(serde::de::value::SeqAccessDeserializer::new(seq))
+        }
+    }
+
+    deserializer.deserialize_any(SlotsVisitor)
 }
 
 impl Default for ExecutionConfig {
