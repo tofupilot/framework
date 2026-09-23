@@ -1,207 +1,93 @@
-# TofuPilot Framework
+# tofupilot framework
 
-[![Downloads](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fapi.crabnebula.app%2Fdirectory%2Frspc%2Finsights.application.get%3Finput%3D%257B%2522appId%2522%253A%252201K81002F5F23QKG30T6HXBR41%2522%252C%2522from%2522%253Anull%252C%2522to%2522%253Anull%257D&query=%24.result.data.downloads.total&label=downloads&color=blue)](https://web.crabnebula.cloud/tofupilot/tofupilot-studio/releases)
+An open-source test orchestration framework for hardware manufacturing. Write test logic in Python, define procedures in YAML, and run them locally or on production stations.
 
-**TofuPilot Framework** is an open-source test orchestration framework for hardware manufacturing.
+[Explore the framework](https://www.tofupilot.com/framework) · [Documentation](https://www.tofupilot.com/docs/frameworks/tofupilot) · [Templates](https://www.tofupilot.com/templates) · [Discord](https://discord.gg/fK3AeTyngh)
+
+<a href="https://www.tofupilot.com/framework">
+  <img src=".github/images/readme-workbench.webp" alt="A laptop running tofupilot connected to a blue circuit board and a bench power supply" width="640">
+</a>
 
 ## Features
 
-**TofuPilot Framework** comes battery-included with many features useful for hardware testing development.
+- **Phases:** Structure tests as Python functions with dependencies, retries, and cleanup.
+- **Operator UI:** Declare prompts and controls in YAML to guide operators and collect inputs.
+- **Parallel execution:** Run independent phases and fixture slots simultaneously.
+- **Measurements:** Record values with units and limits for automatic pass/fail results.
+- **Plugs:** Connect instruments and share resources through reusable Python classes.
+- **Cross-platform:** Run on Windows, Linux, and macOS with the tofupilot CLI.
+- **Connected results:** Run locally without an account, or connect to tofupilot for [unit traceability](https://www.tofupilot.com/traceability), [alerts](https://www.tofupilot.com/alerts), and [AI investigations](https://www.tofupilot.com/investigations).
 
-<img src="https://raw.githubusercontent.com/tofupilot/framework/main/.github/images/readme-features.png" alt="TofuPilot Framework Features" width="200">
+## Get started
 
-- **Phases:** Break tests into phases with dependencies
-- **Operator UI:** Declare components in YAML, no frontend code
-- **Parallel execution:** Run multiple phases simultaneously
-- **Measurements:** Define limits, automatic pass/fail
-- **Plugs:** Equipment drivers as Python classes
-- **Cross-platform:** Windows, Linux, macOS
-- **Dashboard integration:** Integrates with [**TofuPilot Dashboard**](https://tofupilot.com/docs/dashboard) for storage and analytics, or run standalone
+1. [Install the tofupilot CLI](https://www.tofupilot.com/docs/cli) for your operating system.
+2. Clone the [framework starter](https://github.com/tofupilot/template-framework-starter) and run it locally:
 
-## Get Started
+   ```sh
+   git clone https://github.com/tofupilot/template-framework-starter.git
+   cd template-framework-starter
+   tofupilot run
+   ```
 
-The best way to get started with **TofuPilot Framework** is to use **TofuPilot Studio**, a cross-platform desktop app for developing and debugging your test procedures.
+3. Edit `procedure.yaml` and the Python phases to build your own test.
 
-<table>
-<tr>
-<td width="33%">
+Local execution does not require an account. To connect your results and deploy to a station, follow the [getting-started guide](https://www.tofupilot.com/docs/getting-started-with-tofupilot).
 
-**Home**
+## Deploy to production
 
-</td>
-<td width="33%">
+Connect your Git repository, deploy a procedure version to your stations, and give operators a local kiosk or browser interface. Completed runs queue locally when the connection drops and upload when it returns.
 
-**Edit**
+<a href="https://www.tofupilot.com/station">
+  <img src=".github/images/readme-station.webp" alt="A production test station with a circuit board fixture, barcode scanner, and operator display" width="560">
+</a>
 
-</td>
-<td width="33%">
-
-**Run**
-
-</td>
-</tr>
-<tr>
-<td>
-
-<img src="https://raw.githubusercontent.com/tofupilot/framework/main/.github/images/studio-home.png" alt="TofuPilot Studio Home" width="300">
-
-Browse projects and templates
-
-</td>
-<td>
-
-<img src="https://raw.githubusercontent.com/tofupilot/framework/main/.github/images/studio-edit.png" alt="TofuPilot Studio Editor" width="300">
-
-Edit your procedure YAML visually
-
-</td>
-<td>
-
-<img src="https://raw.githubusercontent.com/tofupilot/framework/main/.github/images/studio-run.png" alt="TofuPilot Studio Run" width="300">
-
-Run and debug your procedure
-
-</td>
-</tr>
-</table>
-
-1. Download the latest version for:
-   - [Windows](https://cdn.crabnebula.app/download/tofupilot/tofupilot-studio/latest/platform/nsis-x86_64)
-   - [Linux](https://cdn.crabnebula.app/download/tofupilot/tofupilot-studio/latest/platform/appimage-x86_64)
-   - [macOS](https://cdn.crabnebula.app/download/tofupilot/tofupilot-studio/latest/platform/dmg-aarch64)
-2. Clone a template from the home page
-3. Run it
-4. Customize and extend your test procedure
-
-## Deploy
-
-Once you've developed your test procedure in **TofuPilot Studio**, you can deploy it to production test stations with **TofuPilot Station** (coming soon).
-
-Station is a production-optimized application with simplified operator interface, automatic report sync to Dashboard, auto-updates from Git, and production hardening for factory floor deployment.
+[Explore deployment](https://www.tofupilot.com/station) · [Deployment documentation](https://www.tofupilot.com/docs/deployments)
 
 ## Templates
 
-You can clone these templates from [**TofuPilot Studio**](https://www.tofupilot.com) to get started.
+Browse the [template gallery](https://www.tofupilot.com/templates) for hardware test setups, procedures, and code, including [PCB functional testing](https://www.tofupilot.com/templates/functional-test-fixture-fct), [actuator dyno testing](https://www.tofupilot.com/templates/actuator-end-of-line-dyno-test), and [IMU thermal calibration](https://www.tofupilot.com/templates/imu-thermal-calibration).
 
-<table>
-<tr>
-<td width="33%">
+For small examples of individual framework features, explore the templates in this repository:
 
-**[Hello World](../procedures/templates/1-hello-world)**
-
-</td>
-<td width="33%">
-
-**[Measurements](../procedures/templates/2-measurements-basic)**
-
-</td>
-<td width="33%">
-
-**[Operator UI](../procedures/templates/3-operator-ui-basic)**
-
-</td>
-</tr>
-<tr>
-<td>
-
-[<img src="https://raw.githubusercontent.com/tofupilot/framework/main/templates/1-hello-world/cover.png" width="200">](https://github.com/tofupilot/framework/tree/main/templates/1-hello-world)
-
-Simple procedure showing basic structure
-
-</td>
-<td>
-
-[<img src="https://raw.githubusercontent.com/tofupilot/framework/main/templates/2-measurements-basic/cover.png" width="200">](https://github.com/tofupilot/framework/tree/main/templates/2-measurements-basic)
-
-Capture data with pass/fail criteria
-
-</td>
-<td>
-
-[<img src="https://raw.githubusercontent.com/tofupilot/framework/main/templates/3-operator-ui-basic/cover.png" width="200">](https://github.com/tofupilot/framework/tree/main/templates/3-operator-ui-basic)
-
-Interactive interfaces with input and display
-
-</td>
-</tr>
-<tr>
-<td width="33%">
-
-**[Plugs](https://github.com/tofupilot/framework/tree/main/templates/4-plugs-basic)**
-
-</td>
-<td width="33%">
-
-**[Attachments](https://github.com/tofupilot/framework/tree/main/templates/5-attachments-basic)**
-
-</td>
-<td width="33%">
-
-**[Parallel Phases](https://github.com/tofupilot/framework/tree/main/templates/6-phases-parallel)**
-
-</td>
-</tr>
-<tr>
-<td>
-
-[<img src="https://raw.githubusercontent.com/tofupilot/framework/main/templates/4-plugs-basic/cover.png" width="200">](https://github.com/tofupilot/framework/tree/main/templates/4-plugs-basic)
-
-Persistent resources like test instruments
-
-</td>
-<td>
-
-[<img src="https://raw.githubusercontent.com/tofupilot/framework/main/templates/5-attachments-basic/cover.png" width="200">](https://github.com/tofupilot/framework/tree/main/templates/5-attachments-basic)
-
-Attach files and data to test reports
-
-</td>
-<td>
-
-[<img src="https://raw.githubusercontent.com/tofupilot/framework/main/templates/6-phases-parallel/cover.png" width="200">](https://github.com/tofupilot/framework/tree/main/templates/6-phases-parallel)
-
-Run independent test phases simultaneously
-
-</td>
-</tr>
-</table>
+| Example | What it covers |
+| --- | --- |
+| [Hello World](templates/1-hello-world) | Basic procedure structure |
+| [Measurements](templates/2-measurements-basic) | Values, units, and pass/fail criteria |
+| [Operator UI](templates/3-operator-ui-basic) | Operator inputs and displays |
+| [Plugs](templates/4-plugs-basic) | Persistent instrument connections |
+| [Attachments](templates/5-attachments-basic) | Files and data in test reports |
+| [Parallel phases](templates/6-phases-parallel) | Independent phases running simultaneously |
 
 ## Documentation
 
-You can learn more about all TofuPilot features in the [docs](https://tofupilot.com/docs/framework).
+Start with the [framework documentation](https://www.tofupilot.com/docs/frameworks/tofupilot), or jump to a specific topic:
 
-[<img src="https://raw.githubusercontent.com/tofupilot/framework/main/.github/images/readme-docs.png" alt="Documentation" width="200">](https://tofupilot.com/docs/framework)
+- [Procedures](https://www.tofupilot.com/docs/frameworks/tofupilot/procedures)
+- [Measurements](https://www.tofupilot.com/docs/frameworks/tofupilot/measurements)
+- [Operator UI](https://www.tofupilot.com/docs/frameworks/tofupilot/operator-ui)
+- [Plugs](https://www.tofupilot.com/docs/frameworks/tofupilot/plugs)
+- [CLI reference](https://www.tofupilot.com/docs/cli)
 
-You can raise an issue on [GitHub](https://github.com/tofupilot/framework/issues) or [Discord](https://discord.gg/fK3AeTyngh) for doc improvements.
+See the [full documentation](https://www.tofupilot.com/docs) for station management, analytics, integrations, and hosting options.
 
 ## Community
 
-You can join our [Discord](https://discord.gg/fK3AeTyngh) server to ask anything, report an issue, or get latest updates on TofuPilot features and changes.
+<a href="https://discord.gg/fK3AeTyngh">
+  <img src=".github/images/readme-community.webp" alt="Two tofu characters wearing support headsets, one with a blue pilot cap" width="280">
+</a>
 
-[<img src="https://raw.githubusercontent.com/tofupilot/framework/main/.github/images/readme-discord.png" alt="Join our Discord" width="200">](https://discord.gg/fK3AeTyngh)
-
-You can also raise issues on this [repository](https://github.com/tofupilot/framework/issues) directly.
+Join [Discord](https://discord.gg/fK3AeTyngh) to ask questions, share test setups, and talk with the team. Report bugs and request features through [GitHub issues](https://github.com/tofupilot/framework/issues).
 
 ## About
 
-**TofuPilot Framework** is maintained by the crew of [TofuPilot](https://www.tofupilot.com/about). 
-
-<img src="https://raw.githubusercontent.com/tofupilot/framework/main/.github/images/readme-about.png" alt="About TofuPilot" width="200">
-
-We're a team of robotics, data and quality engineers based out of Switzerland who believe hardware tests deserve the same love as your production code.
+The tofupilot framework is maintained by [the tofupilot team](https://www.tofupilot.com/about), based in Lausanne, Switzerland. We build tools for the engineers and operators who test hardware.
 
 ## License
 
-TofuPilot Framework is open-source under the [MIT license](LICENSE), meaning you can use it freely for any purpose—commercial or personal.
+The framework is available under the [MIT license](LICENSE) for personal and commercial use. Connected dashboards, deployment management, and AI features are offered under [separate plans](https://www.tofupilot.com/pricing).
 
-<img src="https://raw.githubusercontent.com/tofupilot/framework/main/.github/images/readme-license.png" alt="License" width="200">
+## Support the project
 
-TofuPilot Studio and Dashboard source code are not yet open-source, though we're exploring this for the future.
+Help improve the framework with feedback, bug reports, feature requests, and contributions. Star this repository and share it with other hardware test engineers.
 
-## Support Us
-
-We'd love your support through feedback, bug reports, feature requests, and spreading the word to your hardware friends.
-
-[<img src="https://raw.githubusercontent.com/tofupilot/framework/main/.github/images/readme-support.png" alt="Support Us" width="200">](https://www.tofupilot.com/pricing)
-
-The best way to support our team is getting a [TofuPilot Pro](https://www.tofupilot.com/pricing) account to get plug-and-play database and analytics for all your tests.
+For shared production data, deployment management, and analytics, [explore tofupilot plans](https://www.tofupilot.com/pricing).
