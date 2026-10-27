@@ -47,17 +47,6 @@ Connect your Git repository, deploy a procedure version to your stations, and gi
 
 Browse the [template gallery](https://www.tofupilot.com/templates) for hardware test setups, procedures, and code, including [PCB functional testing](https://www.tofupilot.com/templates/functional-test-fixture-fct), [actuator dyno testing](https://www.tofupilot.com/templates/actuator-end-of-line-dyno-test), and [IMU thermal calibration](https://www.tofupilot.com/templates/imu-thermal-calibration).
 
-For small examples of individual framework features, explore the templates in this repository:
-
-| Example | What it covers |
-| --- | --- |
-| [Hello World](templates/1-hello-world) | Basic procedure structure |
-| [Measurements](templates/2-measurements-basic) | Values, units, and pass/fail criteria |
-| [Operator UI](templates/3-operator-ui-basic) | Operator inputs and displays |
-| [Plugs](templates/4-plugs-basic) | Persistent instrument connections |
-| [Attachments](templates/5-attachments-basic) | Files and data in test reports |
-| [Parallel phases](templates/6-phases-parallel) | Independent phases running simultaneously |
-
 ## Documentation
 
 Start with the [framework documentation](https://www.tofupilot.com/docs/frameworks/tofupilot), or jump to a specific topic:
@@ -69,6 +58,14 @@ Start with the [framework documentation](https://www.tofupilot.com/docs/framewor
 - [CLI reference](https://www.tofupilot.com/docs/cli)
 
 See the [full documentation](https://www.tofupilot.com/docs) for station management, analytics, integrations, and hosting options.
+
+## Source
+
+This repository holds the execution engine that the tofupilot CLI runs: the `procedure.yaml` schema, phase scheduling, plugs, the Python worker and the operator UI channel. It is a Rust crate:
+
+```sh
+cargo build
+```
 
 ## Community
 
