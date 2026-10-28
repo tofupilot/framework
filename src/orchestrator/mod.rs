@@ -111,7 +111,7 @@ pub struct Orchestrator {
     /// with the run's values.
     pub(super) procedure_env: crate::procedure_env::ProcedureEnv,
     /// The run's credentials as the host passed them (`with_procedure_env`).
-    /// Empty for a run that does not upload.
+    /// Empty when the CLI has no credentials.
     pub(super) credentials: crate::procedure_env::ProcedureEnv,
     /// The run's context, config and secrets (`with_run_values`). Resolved
     /// from the declarations' defaults at `initialize` when the host

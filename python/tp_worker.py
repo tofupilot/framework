@@ -331,11 +331,11 @@ def _dashboard_ssl_context(ca_cert):
 def dashboard_client():
     """The TofuPilot API client a phase or plug receives as `dashboard`.
 
-    Built once per process from the environment the CLI set for a run
-    that uploads: TOFUPILOT_API_KEY, TOFUPILOT_URL
+    Built once per process from the environment the CLI sets for any run
+    when it is logged in, uploading or not: TOFUPILOT_API_KEY, TOFUPILOT_URL
     (the instance base, no /api) and TOFUPILOT_CA_CERT. The identity is the
-    one the run uploads with; what it may call is what that identity may
-    call on the server."""
+    CLI's login (the station on a station, the user on a laptop); what it
+    may call is what that identity may call on the server."""
     global _dashboard_client
     with _dashboard_lock:
         if _dashboard_client is not None:
@@ -344,9 +344,9 @@ def dashboard_client():
         base_url = (os.environ.get("TOFUPILOT_URL") or "").strip()
         if not api_key or not base_url:
             raise DashboardUnavailable(
-                "The dashboard is not available to this run: run with --upload or on a "
-                "station. The procedure acts as the identity the run uploads with, and a "
-                "run that does not upload has none."
+                "The dashboard is not available to this run: the CLI is not logged in. "
+                "Run `tofupilot login`, then run the procedure again. The procedure acts "
+                "as the identity the CLI is logged in with."
             )
         try:
             import httpx

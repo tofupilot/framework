@@ -1,26 +1,26 @@
 //! Credentials in the procedure's environment.
 //!
-//! A run that uploads gives its procedure the identity it uploads with,
-//! as three variables set on every process the engine spawns for it:
+//! A run gives its procedure the identity the CLI is logged in with,
+//! whether or not it uploads, as three variables set on every process the engine spawns for it:
 //! `TOFUPILOT_API_KEY`, `TOFUPILOT_URL` (instance base, no `/api`) and
 //! `TOFUPILOT_CA_CERT` (only on a private-CA instance).
 //! The host (the CLI) builds the list; the engine only carries it to
 //! the spawn sites.
 //!
-//! A run that does not upload gets none of them. The engine used to pass the
-//! CLI's whole environment through, so an ambient `TOFUPILOT_API_KEY`
-//! on the station reached phases that never asked for it; the strip
-//! below is what makes "no upload, no credentials" true.
+//! A run on a CLI that is not logged in gets none of them. The engine used
+//! to pass the CLI's whole environment through, so an ambient
+//! `TOFUPILOT_API_KEY` on the station reached phases that never asked for
+//! it; the strip below is what makes "no login, no credentials" true.
 
 use std::sync::Once;
 
-/// The variables an uploading run's procedure receives, and the only
+/// The variables a logged-in run's procedure receives, and the only
 /// `TOFUPILOT_*` names ever removed from a child's inherited environment.
 pub const PROCEDURE_ENV_VARS: &[&str] =
     &["TOFUPILOT_API_KEY", "TOFUPILOT_URL", "TOFUPILOT_CA_CERT"];
 
-/// Variables set on every process spawned for one procedure. Empty for a
-/// run that does not upload.
+/// Variables set on every process spawned for one procedure. Empty when
+/// the CLI has no credentials.
 pub type ProcedureEnv = Vec<(String, String)>;
 
 /// Remove the credential variables a child would otherwise inherit from
