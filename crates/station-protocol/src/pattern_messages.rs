@@ -12,12 +12,6 @@
 //! client-side "for instant feedback", don't: that is how wording
 //! drift between surfaces happened the first time.
 //!
-//! Known exception: Studio desktop still runs a frozen copy in
-//! `apps/studio/app/lib/operator-ui-legacy/pattern-messages.ts` until
-//! its runner is ported. It already diverges from this module (substring
-//! match, literal anchors required); treat it as pending deletion, not
-//! as a second source of truth.
-//!
 //! The boundary: a regex explains itself when it reads left to right as
 //! a fixed SEQUENCE of characters and character sets — a single
 //! anchored class like `^[A-Z0-9-]+$` or `^[0-9]{4}$`, or a chain of

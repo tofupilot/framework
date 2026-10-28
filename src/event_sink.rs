@@ -239,7 +239,7 @@ pub struct PlannedPlug {
 }
 
 /// Trait for receiving execution events.
-/// Implemented by each consumer: Studio (Tauri), CLI (TUI + WebSocket), etc.
+/// Implemented by each consumer: CLI (TUI + WebSocket), etc.
 pub trait EventSink: Send + Sync + 'static {
     fn emit(&self, event: &ExecutionEvent);
 }

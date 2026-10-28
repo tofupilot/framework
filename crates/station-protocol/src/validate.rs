@@ -7,11 +7,6 @@
 //! the TUI runs it in-process. Clients render what it returns and
 //! validate nothing themselves — one implementation, one wording,
 //! nothing to drift.
-//!
-//! Known exception: Studio desktop's embedded runner is not ported yet
-//! and still judges submissions with its own frozen copy in
-//! `apps/studio/app/lib/operator-ui-legacy/`. That copy is slated for
-//! deletion once the port lands; do not extend it.
 
 use std::collections::HashMap;
 
