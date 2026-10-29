@@ -167,10 +167,10 @@ pub struct PlugServiceManager {
     /// migrated (Studio, in-engine tests).
     python_path: Option<PathBuf>,
     id: String,
-    /// The procedure's `dashboard:` credentials, set on every plug
-    /// process this manager spawns. Interior mutability because the
-    /// manager is built inside `ResourceManager` before the host knows
-    /// the run's identity.
+    /// The dashboard credentials, then the procedure's `env:`, set on
+    /// every plug process this manager spawns.
+    /// Interior mutability because the manager is built inside
+    /// `ResourceManager` before the host knows the run's identity.
     procedure_env: std::sync::RwLock<crate::procedure_env::ProcedureEnv>,
 }
 
@@ -195,9 +195,9 @@ impl PlugServiceManager {
         }
     }
 
-    /// The procedure's `dashboard:` credentials for plug processes
-    /// spawned from now on. Running services keep the env they started
-    /// with.
+    /// The env (credentials, then the procedure's `env:`) for plug
+    /// processes spawned from now on. Running services keep the env they
+    /// started with.
     pub fn set_procedure_env(&self, env: crate::procedure_env::ProcedureEnv) {
         *self
             .procedure_env
