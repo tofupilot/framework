@@ -31,8 +31,19 @@ pub const SECRET_IN_ENV: &str = "secret_in_env";
 pub const PYTHON_SYNTAX: &str = "python_syntax";
 /// Could not be judged here, for want of the procedure's Python: a
 /// `uses: <package>:<path>` without its environment, Python sources no
-/// interpreter could compile (`tofupilot validate`).
+/// interpreter could compile, a `uv.lock` without uv, a Python or a build
+/// backend to judge it (`tofupilot validate`).
 pub const NOT_CHECKED: &str = "not_checked";
+/// A `pyproject.toml` with no `uv.lock` beside it or at its uv workspace
+/// root: the deployment build resolves the dependencies itself.
+pub const LOCK_MISSING: &str = "lock_missing";
+/// `uv.lock` does not match `pyproject.toml`: the deployment build
+/// refuses it.
+pub const LOCK_STALE: &str = "lock_stale";
+/// A `uv.lock` a deployment will not carry: matched by `.gitignore`, not
+/// committed, or changed since its last commit while no `pyproject.toml`
+/// was.
+pub const LOCK_NOT_SHIPPED: &str = "lock_not_shipped";
 
 // References from the procedure to its Python code.
 pub const PHASE_PYTHON_INVALID: &str = "phase_python_invalid";
