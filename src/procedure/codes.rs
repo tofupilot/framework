@@ -46,6 +46,13 @@ pub const PHASE_RESULT_NOT_RECEIVED: &str = "phase_result_not_received";
 pub const PHASE_PLUG_OUT_OF_SCOPE: &str = "phase_plug_out_of_scope";
 pub const PHASE_SCOPE_IGNORED: &str = "phase_scope_ignored";
 pub const PHASE_PLUG_METHOD_UNKNOWN: &str = "phase_plug_method_unknown";
+/// A plug method called with a keyword argument: the phase-side proxy
+/// takes positional arguments only.
+pub const PHASE_PLUG_CALL_KEYWORD: &str = "phase_plug_call_keyword";
+/// `await` on a plug call: the proxy returns the value, not a coroutine.
+pub const PHASE_PLUG_CALL_AWAITED: &str = "phase_plug_call_awaited";
+/// A plug property called like a method: the proxy refuses it.
+pub const PHASE_PLUG_PROPERTY_CALLED: &str = "phase_plug_property_called";
 pub const PYTHON_IMPORT_MISSING: &str = "python_import_missing";
 pub const PLUG_PYTHON_INVALID: &str = "plug_python_invalid";
 pub const PLUG_CLASS_NOT_FOUND: &str = "plug_class_not_found";

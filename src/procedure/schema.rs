@@ -615,18 +615,18 @@ fn follow_import(
 /// itself: a driver method of that name is out of a phase's reach.
 pub const PLUG_PROXY_OWN: &[&str] = &["call", "deadline"];
 
-/// Every name a plug's class has (its own and those of its bases in the
-/// procedure), read from its source. `None` when it cannot be known: an
-/// installed class, a base from outside the procedure, a `__getattr__`.
-fn plug_class_members(plug: &PlugDefinition, procedure_dir: &Path) -> Option<HashSet<String>> {
+/// A plug's class and its bases in the procedure, read from their
+/// sources: the class first, then its bases breadth first (Python's
+/// lookup order for single inheritance). `None` when the hierarchy cannot
+/// be known: an installed class, a base from outside the procedure, a
+/// `__getattr__`, methods attached with `setattr`.
+fn plug_classes(plug: &PlugDefinition, procedure_dir: &Path) -> Option<Vec<(String, String)>> {
     let (file, class) = plug.python.parse(procedure_dir).ok()?;
     let source = std::fs::read_to_string(&file).ok()?;
-    let mut members = HashSet::new();
-    let mut pending = vec![(file, source, class)];
-    let mut seen = 0;
-    while let Some((file, source, class)) = pending.pop() {
-        seen += 1;
-        if seen > 8 {
+    let mut classes = Vec::new();
+    let mut pending = std::collections::VecDeque::from([(file, source, class)]);
+    while let Some((file, source, class)) = pending.pop_front() {
+        if classes.len() >= 8 {
             return None;
         }
         let (file, source, class) = follow_import(&file, source, &class, procedure_dir);
@@ -643,7 +643,6 @@ fn plug_class_members(plug: &PlugDefinition, procedure_dir: &Path) -> Option<Has
         {
             return None;
         }
-        members.extend(own);
         for base in super::pysource::class_bases(&source, &class)? {
             if base == "object" {
                 continue;
@@ -651,10 +650,78 @@ fn plug_class_members(plug: &PlugDefinition, procedure_dir: &Path) -> Option<Has
             if base.contains('.') || base.contains('[') {
                 return None;
             }
-            pending.push((file.clone(), source.clone(), base));
+            pending.push_back((file.clone(), source.clone(), base));
         }
+        classes.push((source, class));
     }
-    Some(members)
+    Some(classes)
+}
+
+/// Every name a plug's class has: its own and those of its bases in the
+/// procedure.
+fn plug_class_members(classes: &[(String, String)]) -> HashSet<String> {
+    classes
+        .iter()
+        .filter_map(|(source, class)| super::pysource::class_members(source, class))
+        .flatten()
+        .collect()
+}
+
+/// Whether `name` on the plug's class is a property: decided by the first
+/// class of the lookup order that binds it, as Python does.
+fn plug_member_is_property(classes: &[(String, String)], name: &str) -> bool {
+    classes
+        .iter()
+        .find(|(source, class)| {
+            super::pysource::class_members(source, class)
+                .is_some_and(|m| m.iter().any(|m| m == name))
+        })
+        .and_then(|(source, class)| super::pysource::class_properties(source, class))
+        .is_some_and(|p| p.iter().any(|p| p == name))
+}
+
+/// The parameters of the plug method `method`, from the first class of
+/// the lookup order that defines it.
+fn plug_method_signature(
+    classes: &[(String, String)],
+    method: &str,
+) -> Option<super::pysource::MethodSignature> {
+    classes
+        .iter()
+        .find_map(|(source, class)| super::pysource::method_signature(source, class, method))
+}
+
+/// `call` passed by position, its keywords placed in the order `params`
+/// takes them: `psu.set(1, channel=2)` gives `psu.set(1, 2)`. `None` when
+/// the keywords do not fill the parameters right after the positional
+/// ones (a skipped default, a `**opts`, a name the method does not take,
+/// a keyword-only parameter).
+fn positional_call(
+    call: &super::pysource::MethodCall,
+    signature: &super::pysource::MethodSignature,
+) -> Option<String> {
+    let params = &signature.params[..signature.positional.min(signature.params.len())];
+    let keywords: Vec<(&str, &str)> = call
+        .keywords()
+        .map(|k| {
+            k.split_once('=')
+                .map(|(name, value)| (name.trim(), value.trim()))
+                .filter(|(name, _)| !name.starts_with('*'))
+        })
+        .collect::<Option<_>>()?;
+    let positional: Vec<&str> = call.positional().collect();
+    if positional.iter().any(|a| a.starts_with('*')) {
+        return None;
+    }
+    let mut args: Vec<&str> = positional.clone();
+    for param in params.iter().skip(positional.len()).take(keywords.len()) {
+        args.push(keywords.iter().find(|(n, _)| *n == param.name)?.1);
+    }
+    if args.len() != positional.len() + keywords.len() {
+        return None;
+    }
+    let head = call.text.split_once('(')?.0;
+    Some(format!("{head}({})", args.join(", ")))
 }
 
 /// The `__init__` signature `class` gets, read where it is defined: a
@@ -4626,31 +4693,135 @@ impl ProcedureDefinition {
                                     else {
                                         continue;
                                     };
-                                    let Some(members) = plug_class_members(plug, procedure_dir)
+                                    let Some(calls) =
+                                        pysource::calls_through(&source, &callable, param)
                                     else {
                                         continue;
                                     };
-                                    let calls = pysource::calls_on(&source, &callable, param)
-                                        .unwrap_or_default();
+                                    let warn = |code: &'static str, message: String, hint: Option<String>| RefProblem {
+                                        severity: RefSeverity::Warning,
+                                        hint,
+                                        ..RefProblem::error(code, message, at("python"))
+                                    };
+                                    let mut seen = HashSet::new();
+                                    let calls: Vec<_> = calls
+                                        .into_iter()
+                                        .filter(|c| seen.insert((c.text.clone(), c.awaited)))
+                                        .collect();
+                                    // The proxy answers with the value: there
+                                    // is nothing to await, whatever the class.
+                                    for call in calls.iter().filter(|c| c.awaited) {
+                                        problems.push(warn(
+                                            codes::PHASE_PLUG_CALL_AWAITED,
+                                            format!(
+                                                "Phase `{}`: `await {}` awaits the value plug `{}` returns, which is not awaitable: the phase would fail with a TypeError; call it without `await`, from an `async def` phase too",
+                                                phase.key, call.text, plug.key
+                                            ),
+                                            Some(call.text.clone()),
+                                        ));
+                                    }
+                                    let classes = plug_classes(plug, procedure_dir);
+                                    // The proxy refuses every keyword
+                                    // (`PLUG_CALL_ACCEPTS_KEYWORDS` in
+                                    // tp_worker.py), whatever the class.
+                                    // The proxy's own names: its `call`
+                                    // takes keywords, `deadline` is not the
+                                    // driver's.
+                                    for call in calls.iter().filter(|c| {
+                                        c.keywords().next().is_some()
+                                            && !PLUG_PROXY_OWN.contains(&c.method.as_str())
+                                    }) {
+                                        let signature = classes
+                                            .as_deref()
+                                            .and_then(|c| plug_method_signature(c, &call.method));
+                                        let names: Vec<&str> = call
+                                            .keywords()
+                                            .map(|k| k.split_once('=').map_or(k, |(n, _)| n.trim()))
+                                            .collect();
+                                        let listed = names
+                                            .iter()
+                                            .map(|n| format!("`{n}`"))
+                                            .collect::<Vec<_>>()
+                                            .join(", ");
+                                        let unknown = match &signature {
+                                            Some(sig) if !sig.kwargs => names
+                                                .iter()
+                                                .filter(|n| !n.starts_with('*'))
+                                                .find(|n| !sig.params.iter().any(|p| p.name == **n))
+                                                .map(|n| {
+                                                    format!(
+                                                        "; `{}` has no parameter `{n}`{}",
+                                                        call.method,
+                                                        super::markers::did_you_mean(
+                                                            n,
+                                                            sig.params
+                                                                .iter()
+                                                                .map(|p| p.name.as_str())
+                                                        )
+                                                    )
+                                                }),
+                                            _ => None,
+                                        };
+                                        let hint = signature
+                                            .as_ref()
+                                            .and_then(|sig| positional_call(call, sig));
+                                        let fix = match (&unknown, &hint) {
+                                            (Some(unknown), _) => unknown.clone(),
+                                            (None, Some(hint)) => format!("; write `{hint}`"),
+                                            (None, None) => {
+                                                "; pass the values by position".to_string()
+                                            }
+                                        };
+                                        problems.push(warn(
+                                            codes::PHASE_PLUG_CALL_KEYWORD,
+                                            format!(
+                                                "Phase `{}`: `{}` passes {listed} by keyword to plug `{}`, which takes positional arguments only: the phase would fail with a TypeError{fix}",
+                                                phase.key, call.text, plug.key
+                                            ),
+                                            hint,
+                                        ));
+                                    }
+                                    let Some(classes) = classes else {
+                                        continue;
+                                    };
+                                    let members = plug_class_members(&classes);
+                                    let mut methods: Vec<String> = Vec::new();
+                                    for call in &calls {
+                                        if !methods.contains(&call.method) {
+                                            methods.push(call.method.clone());
+                                        }
+                                    }
                                     // The proxy keeps `call` and `deadline`:
                                     // the driver's method of that name is
                                     // never reached from a phase.
-                                    for method in calls.iter().filter(|m| {
+                                    for method in methods.iter().filter(|m| {
                                         PLUG_PROXY_OWN.contains(&m.as_str()) && members.contains(*m)
                                     }) {
-                                        problems.push(RefProblem {
-                                            severity: RefSeverity::Warning,
-                                            ..RefProblem::error(
-                                                codes::PHASE_PLUG_METHOD_UNKNOWN,
-                                                format!(
-                                                    "Phase `{}`: `{param}.{method}()` calls the plug proxy's own `{method}`, not the method of plug `{}`; rename the driver method",
-                                                    phase.key, plug.key
-                                                ),
-                                                at("python"),
-                                            )
-                                        });
+                                        problems.push(warn(
+                                            codes::PHASE_PLUG_METHOD_UNKNOWN,
+                                            format!(
+                                                "Phase `{}`: `{param}.{method}()` calls the plug proxy's own `{method}`, not the method of plug `{}`; rename the driver method",
+                                                phase.key, plug.key
+                                            ),
+                                            None,
+                                        ));
                                     }
-                                    for method in calls.into_iter().filter(|m| {
+                                    // The proxy refuses to call a property
+                                    // (tp_plug.py), without running it.
+                                    for method in methods.iter().filter(|m| {
+                                        !PLUG_PROXY_OWN.contains(&m.as_str())
+                                            && plug_member_is_property(&classes, m)
+                                    }) {
+                                        problems.push(warn(
+                                            codes::PHASE_PLUG_PROPERTY_CALLED,
+                                            format!(
+                                                "Phase `{}`: `{param}.{method}()` calls a property of plug `{}`, and the plug proxy only calls methods: the phase would fail; read it through a method of the plug (`def get_{method}(self): return self.{method}`)",
+                                                phase.key, plug.key
+                                            ),
+                                            None,
+                                        ));
+                                    }
+                                    for method in methods.into_iter().filter(|m| {
                                         !members.contains(m)
                                             && !PLUG_PROXY_OWN.contains(&m.as_str())
                                     }) {

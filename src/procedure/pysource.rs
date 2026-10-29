@@ -27,6 +27,7 @@
 //! and the engine disagreeing about the same file.
 
 use regex::Regex;
+use std::borrow::Cow;
 use std::sync::OnceLock;
 
 fn re(cell: &'static OnceLock<Regex>, pattern: &str) -> &'static Regex {
@@ -78,6 +79,8 @@ fn import_line() -> &'static Regex {
 struct LogicalLine {
     /// Indentation of the first physical line, in characters.
     indent: usize,
+    /// Index of the first physical line in the file.
+    first: usize,
     /// The statement, comments stripped and continuations joined by a
     /// single space, trimmed.
     text: String,
@@ -163,7 +166,7 @@ fn logical_lines(content: &str) -> Vec<LogicalLine> {
     let mut out: Vec<LogicalLine> = Vec::new();
     let mut cont = Continuation::default();
     let mut open: Option<LogicalLine> = None;
-    for raw in content.lines() {
+    for (n, raw) in content.lines().enumerate() {
         let (code, backslash) = cont.feed(raw);
         let piece = code.trim().trim_end_matches('\\').trim_end();
         match open.as_mut() {
@@ -178,6 +181,7 @@ fn logical_lines(content: &str) -> Vec<LogicalLine> {
             None => {
                 open = Some(LogicalLine {
                     indent: code.len() - code.trim_start().len(),
+                    first: n,
                     text: piece.to_string(),
                 });
             }
@@ -203,7 +207,11 @@ fn logical_lines(content: &str) -> Vec<LogicalLine> {
 /// or the body written on the `def` line itself (`def f(m): m.v = 1`).
 fn function_body(lines: &[LogicalLine], start: usize) -> Vec<LogicalLine> {
     let mut body: Vec<LogicalLine> = one_line_body(&lines[start].text)
-        .map(|text| LogicalLine { indent: 1, text })
+        .map(|text| LogicalLine {
+            indent: 1,
+            first: lines[start].first,
+            text,
+        })
         .into_iter()
         .collect();
     body.extend(
@@ -331,9 +339,90 @@ pub fn top_level_functions(content: &str) -> Vec<String> {
     top_level_names(content, def_line())
 }
 
-/// Top-level classes, in file order, deduped.
+/// Module-level classes, in file order, deduped: column 0, and those
+/// under an `if`/`try` no `def` or `class` encloses (a class picked by
+/// platform, a fallback under `except ImportError:`).
 pub fn top_level_classes(content: &str) -> Vec<String> {
-    top_level_names(content, class_header())
+    let lines = logical_lines(content);
+    let mut names: Vec<String> = Vec::new();
+    for i in module_classes(&lines) {
+        let name = class_header()
+            .captures(&lines[i].text)
+            .map(|c| c[1].to_string());
+        if let Some(name) = name.filter(|n| !names.contains(n)) {
+            names.push(name);
+        }
+    }
+    names
+}
+
+/// The logical lines that open a module-level class, in file order.
+/// Module level is "nothing encloses it", as in `binds_top_level`: an
+/// `if` or a `try` does not open a namespace, a `def` or a `class` does.
+fn module_classes(lines: &[LogicalLine]) -> Vec<usize> {
+    let mut namespace: Option<usize> = None;
+    let mut out = Vec::new();
+    for (i, line) in lines.iter().enumerate() {
+        if namespace.is_some_and(|indent| line.indent <= indent) {
+            namespace = None;
+        }
+        if namespace.is_some() {
+            continue;
+        }
+        if class_header().is_match(&line.text) {
+            out.push(i);
+            namespace = Some(line.indent);
+        } else if def_line().is_match(&line.text) {
+            namespace = Some(line.indent);
+        }
+    }
+    out
+}
+
+/// The source the class scans below read `class_name` from: the file
+/// itself when the class is at column 0, else the one guarded definition
+/// (`if`/`try`), decorators included, dedented to column 0 so it reads as
+/// a top-level class. `None` when the class is not defined at module
+/// level, or is defined more than once under guards: which one runs is
+/// decided at import, and reading one would judge calls against the
+/// wrong body.
+fn class_view<'a>(content: &'a str, class_name: &str) -> Option<Cow<'a, str>> {
+    let lines = logical_lines(content);
+    let defs: Vec<usize> = module_classes(&lines)
+        .into_iter()
+        .filter(|&i| {
+            class_header()
+                .captures(&lines[i].text)
+                .is_some_and(|c| &c[1] == class_name)
+        })
+        .collect();
+    if defs.iter().any(|&i| lines[i].indent == 0) {
+        return Some(Cow::Borrowed(content));
+    }
+    let [i] = defs.as_slice() else {
+        return None;
+    };
+    let indent = lines[*i].indent;
+    let mut top = *i;
+    while top > 0 && lines[top - 1].indent == indent && lines[top - 1].text.starts_with('@') {
+        top -= 1;
+    }
+    let physical: Vec<&str> = content.lines().collect();
+    let end = lines[i + 1..]
+        .iter()
+        .find(|l| l.indent <= indent)
+        .map_or(physical.len(), |l| l.first);
+    let block: Vec<&str> = physical[lines[top].first..end]
+        .iter()
+        .map(|l| {
+            // A docstring's continuation may sit left of the class. Only
+            // ASCII indentation counts: a full-width space (U+3000) in a
+            // docstring is text, and slicing inside it would panic.
+            let strip = l.len() - l.trim_start_matches([' ', '\t']).len();
+            &l[strip.min(indent)..]
+        })
+        .collect();
+    Some(Cow::Owned(block.join("\n")))
 }
 
 fn top_level_names(content: &str, pattern: &Regex) -> Vec<String> {
@@ -813,6 +902,8 @@ pub fn imported_modules(content: &str) -> Vec<(usize, String)> {
 /// its methods assign. Inherited ones are not included. `None` when there
 /// is no such class.
 pub fn class_members(content: &str, class_name: &str) -> Option<Vec<String>> {
+    let view = class_view(content, class_name)?;
+    let content = view.as_ref();
     // A target list: `name =`, `a, b =`, `name: T`, at any depth of the
     // body (a method under `if`/`try` is still the class's).
     static TARGETS: OnceLock<Regex> = OnceLock::new();
@@ -954,10 +1045,58 @@ fn blank_strings(text: &str) -> String {
 }
 
 /// The attributes a top-level `function` calls on its parameter `name`
-/// (`psu.read_voltage(1)` gives `read_voltage`). `None` when the
-/// function is not in the file, or rebinds `name` in its body (an
-/// assignment, a loop target, a nested `def` or `lambda` parameter).
+/// (`psu.read_voltage(1)` gives `read_voltage`), deduped. `None` as for
+/// [`calls_through`].
 pub fn calls_on(content: &str, function: &str, name: &str) -> Option<Vec<String>> {
+    let mut out: Vec<String> = Vec::new();
+    for call in calls_through(content, function, name)? {
+        if !out.contains(&call.method) {
+            out.push(call.method);
+        }
+    }
+    Some(out)
+}
+
+/// One `name.method(...)` call in a function body, as written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MethodCall {
+    pub method: String,
+    /// The arguments, each as written (`3.3`, `channel=1`, `**opts`).
+    pub args: Vec<String>,
+    /// Written `await name.method(...)`.
+    pub awaited: bool,
+    /// The call as written, `await` left out: `psu.set(1, ch=2)`.
+    pub text: String,
+}
+
+impl MethodCall {
+    /// The arguments passed by keyword: `channel=1`, and `**opts`.
+    pub fn keywords(&self) -> impl Iterator<Item = &str> {
+        self.args
+            .iter()
+            .map(String::as_str)
+            .filter(|a| is_keyword(a))
+    }
+
+    /// The arguments passed by position, `*values` included.
+    pub fn positional(&self) -> impl Iterator<Item = &str> {
+        self.args
+            .iter()
+            .map(String::as_str)
+            .filter(|a| !is_keyword(a))
+    }
+}
+
+fn is_keyword(arg: &str) -> bool {
+    static KEYWORD: OnceLock<Regex> = OnceLock::new();
+    re(&KEYWORD, r"^(?:\*\*|[A-Za-z_][A-Za-z0-9_]*\s*=(?:[^=]|$))").is_match(arg)
+}
+
+/// Every call a top-level `function` makes on its parameter `name`, in
+/// source order. `None` when the function is not in the file, or rebinds
+/// `name` in its body (an assignment, a loop target, a nested `def` or
+/// `lambda` parameter).
+pub fn calls_through(content: &str, function: &str, name: &str) -> Option<Vec<MethodCall>> {
     let n = regex::escape(name);
     let call = Regex::new(&format!(
         r"(^|[^A-Za-z0-9_.]){n}\s*\.\s*([A-Za-z_][A-Za-z0-9_]*)\s*\("
@@ -974,16 +1113,76 @@ pub fn calls_on(content: &str, function: &str, name: &str) -> Option<Vec<String>
                 .captures(&l.text)
                 .is_some_and(|c| &c[1] == function)
     })?;
-    let mut out: Vec<String> = Vec::new();
+    let mut out = Vec::new();
     for line in &function_body(&lines, start) {
         let text = blank_strings(&line.text);
         if rebind.is_match(&text) {
             return None;
         }
+        // `blank_strings` keeps one char per char: an index into the
+        // blanked text is one into the written text.
+        let written: Vec<char> = line.text.chars().collect();
+        let blanked: Vec<char> = text.chars().collect();
+        let at = |byte: usize| text[..byte].chars().count();
         for c in call.captures_iter(&text) {
-            if !out.iter().any(|m| m == &c[2]) {
-                out.push(c[2].to_string());
+            let (Some(head), Some(whole)) = (c.get(1), c.get(0)) else {
+                continue;
+            };
+            let begin = at(head.end());
+            let open = at(whole.end()) - 1;
+            let mut depth = 0usize;
+            let mut close = blanked.len();
+            for (i, ch) in blanked.iter().enumerate().skip(open) {
+                match ch {
+                    '(' | '[' | '{' => depth += 1,
+                    ')' | ']' | '}' => {
+                        depth = depth.saturating_sub(1);
+                        if depth == 0 {
+                            close = i;
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
             }
+            let mut args = Vec::new();
+            let (mut from, mut depth) = (open + 1, 0usize);
+            for i in open + 1..=close.min(blanked.len()) {
+                let ch = blanked.get(i).copied().unwrap_or(')');
+                match ch {
+                    '(' | '[' | '{' => depth += 1,
+                    ')' | ']' | '}' if depth > 0 => depth -= 1,
+                    ',' | ')' | ']' | '}' if depth == 0 => {
+                        let arg: String = written[from..i].iter().collect();
+                        if !arg.trim().is_empty() {
+                            args.push(arg.trim().to_string());
+                        }
+                        from = i + 1;
+                    }
+                    _ => {}
+                }
+            }
+            let before: String = blanked[..begin].iter().collect();
+            let before = before.trim_end();
+            // `await psu.f().strip()` awaits the chain, not the call: the
+            // call's text alone would be a wrong hint.
+            let chained = blanked
+                .iter()
+                .skip(close + 1)
+                .find(|ch| !ch.is_whitespace())
+                .is_some_and(|ch| matches!(ch, '.' | '[' | '('));
+            let awaited = !chained
+                && before.strip_suffix("await").is_some_and(|rest| {
+                    !rest.ends_with(|ch: char| ch.is_ascii_alphanumeric() || ch == '_' || ch == '.')
+                });
+            out.push(MethodCall {
+                method: c[2].to_string(),
+                args,
+                awaited,
+                text: written[begin..(close + 1).min(written.len())]
+                    .iter()
+                    .collect(),
+            });
         }
     }
     Some(out)
@@ -992,6 +1191,8 @@ pub fn calls_on(content: &str, function: &str, name: &str) -> Option<Vec<String>
 /// The base classes a top-level `class` lists, as written (`Instrument`,
 /// `base.Instrument`); empty for none, `None` for no such class.
 pub fn class_bases(content: &str, class_name: &str) -> Option<Vec<String>> {
+    let view = class_view(content, class_name)?;
+    let content = view.as_ref();
     content.lines().find_map(|l| {
         let c = class_line().captures(l)?;
         (&c[1] == class_name).then(|| {
@@ -1015,49 +1216,15 @@ pub fn class_bases(content: &str, class_name: &str) -> Option<Vec<String>> {
 /// no arguments from inside this file; reading it as "accepts nothing"
 /// would flag every working key as unknown. `None` means: issue nothing.
 pub fn init_signature(content: &str, class_name: &str) -> Option<InitSignature> {
-    let lines: Vec<&str> = content.lines().collect();
-    let class_idx = lines.iter().position(|l| {
-        class_line()
-            .captures(l)
-            .map(|c| &c[1] == class_name)
-            .unwrap_or(false)
-    })?;
-
-    // `def __init__(` in the class body, at any depth (under `if`/`try`
-    // too) but not inside a nested class, and before the next column-0
-    // statement (which ends the class).
-    let mut init_idx = None;
-    let mut nested_class: Option<usize> = None;
-    let mut quotes = TripleQuotes::default();
-    for (i, raw) in lines.iter().enumerate().skip(class_idx + 1) {
-        if raw.trim().is_empty() {
-            continue;
-        }
-        if quotes.is_string(raw) {
-            continue;
-        }
-        if !raw.starts_with(|c: char| c.is_whitespace()) {
-            break;
-        }
-        if raw.trim_start().starts_with('#') {
-            continue;
-        }
-        let indent = raw.len() - raw.trim_start().len();
-        if nested_class.is_some_and(|n| indent > n) {
-            continue;
-        }
-        nested_class = None;
-        if raw.trim_start().starts_with("class ") {
-            nested_class = Some(indent);
-            continue;
-        }
-        if init_line().is_match(raw) {
-            init_idx = Some(i);
-            break;
-        }
+    let view = class_view(content, class_name)?;
+    let lines: Vec<&str> = view.lines().collect();
+    let class_idx = class_index(&lines, class_name)?;
+    // A bracket or quote left open (the file mid-edit) swallows what
+    // follows it: the class cannot be read, which is not "no `__init__`".
+    if !statements_close(&lines) {
+        return None;
     }
-
-    match init_idx {
+    match member_def_index(&lines, class_idx, init_line()) {
         Some(i) => {
             let (params, kwargs) = parse_signature_at(&lines, i);
             Some(InitSignature {
@@ -1076,6 +1243,162 @@ pub fn init_signature(content: &str, class_name: &str) -> Option<InitSignature> 
             })
         }),
     }
+}
+
+/// Whether every statement of `lines` ends: no bracket or quote left
+/// open at the end of the file.
+fn statements_close(lines: &[&str]) -> bool {
+    let mut cont = Continuation::default();
+    let mut backslash = false;
+    for line in lines {
+        backslash = cont.feed(line).1;
+    }
+    cont.settled(backslash)
+}
+
+/// The line of the column-0 `class class_name` statement.
+fn class_index(lines: &[&str], class_name: &str) -> Option<usize> {
+    lines.iter().position(|l| {
+        class_line()
+            .captures(l)
+            .map(|c| &c[1] == class_name)
+            .unwrap_or(false)
+    })
+}
+
+/// The line of a `def` matching `def_re` in the class body at
+/// `class_idx`, at any depth (under `if`/`try` too) but not inside a
+/// nested class, and before the next column-0 statement (which ends the
+/// class).
+fn member_def_index(lines: &[&str], class_idx: usize, def_re: &Regex) -> Option<usize> {
+    static DEF: OnceLock<Regex> = OnceLock::new();
+    let any_def = re(&DEF, r"^\s+(?:async\s+)?def\s");
+    static OVERLOAD: OnceLock<Regex> = OnceLock::new();
+    let overload = re(&OVERLOAD, r"^@\s*(?:[A-Za-z_][A-Za-z0-9_.]*\.)?overload\b");
+    // Statements, not physical lines: a black-style signature closes at
+    // the method's own indent, and a decorator can span lines.
+    let logical = logical_lines(&lines.join("\n"));
+    let start = logical.iter().position(|l| l.first == class_idx)?;
+    let class_indent = logical[start].indent;
+    // Inside a nested class, or the body of a method: a `def` there is
+    // not the class's.
+    let mut nested: Option<usize> = None;
+    let mut decorators: Vec<&str> = Vec::new();
+    for line in &logical[start + 1..] {
+        if line.indent <= class_indent {
+            break;
+        }
+        if nested.is_some_and(|n| line.indent > n) {
+            continue;
+        }
+        nested = None;
+        let text = line.text.as_str();
+        if text.starts_with('@') {
+            decorators.push(text);
+            continue;
+        }
+        let decorated = std::mem::take(&mut decorators);
+        let physical = lines.get(line.first).copied().unwrap_or("");
+        if text.starts_with("class ") {
+            nested = Some(line.indent);
+            continue;
+        }
+        // An `@overload` stub is not what runs: the plain `def` is.
+        if def_re.is_match(physical) && !decorated.iter().any(|d| overload.is_match(d)) {
+            return Some(line.first);
+        }
+        if any_def.is_match(physical) {
+            nested = Some(line.indent);
+        }
+    }
+    None
+}
+
+/// A method's parameters after `self` (or `cls`).
+#[derive(Debug, Clone)]
+pub struct MethodSignature {
+    pub params: Vec<InitParam>,
+    /// Takes `**kwargs`: no keyword is unknown.
+    pub kwargs: bool,
+    /// How many of `params` can be passed by position (those before a
+    /// bare `*` or a `*args`).
+    pub positional: usize,
+}
+
+/// The signature of a method of a module-level class. `None` when the
+/// class or the method is not found in its body.
+pub fn method_signature(content: &str, class_name: &str, method: &str) -> Option<MethodSignature> {
+    let view = class_view(content, class_name)?;
+    let lines: Vec<&str> = view.lines().collect();
+    let class_idx = class_index(&lines, class_name)?;
+    let def_re = Regex::new(&format!(
+        r"^\s+(?:async\s+)?def\s+{}\s*\(",
+        regex::escape(method)
+    ))
+    .ok()?;
+    let (mut params, kwargs, mut positional) =
+        parse_signature_full(&lines, member_def_index(&lines, class_idx, &def_re)?);
+    if params.first().is_some_and(|p| p.name == "cls") {
+        params.remove(0);
+        positional = positional.saturating_sub(1);
+    }
+    Some(MethodSignature {
+        params,
+        kwargs,
+        positional,
+    })
+}
+
+/// The properties a module-level class body defines: a `def` under
+/// `@property`, `@cached_property` (`functools.` too),
+/// `@abstractproperty` or `@<name>.setter`, and `name = property(...)`.
+/// Inherited ones are not included. `None` when there is no such class.
+pub fn class_properties(content: &str, class_name: &str) -> Option<Vec<String>> {
+    static DECORATOR: OnceLock<Regex> = OnceLock::new();
+    let decorator = re(
+        &DECORATOR,
+        r"^@\s*(?:(?:functools|abc)\.)?(?:property|cached_property|abstractproperty)\b|^@\s*[A-Za-z_][A-Za-z0-9_]*\.(?:setter|getter|deleter)\b",
+    );
+    static ASSIGNED: OnceLock<Regex> = OnceLock::new();
+    let assigned = re(
+        &ASSIGNED,
+        r"^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:(?:functools|builtins)\.)?(?:property|cached_property)\s*\(",
+    );
+    let view = class_view(content, class_name)?;
+    let lines = logical_lines(view.as_ref());
+    let start = lines.iter().position(|l| {
+        l.indent == 0
+            && class_header()
+                .captures(&l.text)
+                .is_some_and(|c| &c[1] == class_name)
+    })?;
+    let mut names = Vec::new();
+    let mut in_def: Option<usize> = None;
+    let mut decorated = false;
+    for line in lines[start + 1..].iter().take_while(|l| l.indent > 0) {
+        if in_def.is_some_and(|d| line.indent > d) {
+            continue;
+        }
+        in_def = None;
+        let text = line.text.as_str();
+        if text.starts_with('@') {
+            decorated |= decorator.is_match(text);
+            continue;
+        }
+        let def = text.trim_start_matches("async ").trim_start();
+        if let Some(c) = def_line().captures(def) {
+            if decorated {
+                names.push(c[1].to_string());
+            }
+            in_def = Some(line.indent);
+        } else if text.starts_with("class ") {
+            in_def = Some(line.indent);
+        } else if let Some(c) = assigned.captures(text) {
+            names.push(c[1].to_string());
+        }
+        decorated = false;
+    }
+    Some(names)
 }
 
 /// No `__init__`, no annotated attribute, no base but `object` and no
@@ -1135,6 +1458,13 @@ fn generates_constructor(lines: &[&str], class_idx: usize) -> bool {
 /// lines reads the same as a one-liner; quote-aware so a paren inside a
 /// default string does not move the depth.
 fn parse_signature_at(lines: &[&str], def_idx: usize) -> (Vec<InitParam>, bool) {
+    let (params, kwargs, _) = parse_signature_full(lines, def_idx);
+    (params, kwargs)
+}
+
+/// [`parse_signature_at`], and how many of the parameters can be passed
+/// by position: those before a bare `*` or a `*args`.
+fn parse_signature_full(lines: &[&str], def_idx: usize) -> (Vec<InitParam>, bool, usize) {
     let mut sig = String::new();
     let mut depth = 0i32;
     let mut quote: Option<char> = None;
@@ -1180,25 +1510,29 @@ fn parse_signature_at(lines: &[&str], def_idx: usize) -> (Vec<InitParam>, bool) 
 
     let mut params = Vec::new();
     let mut kwargs = false;
+    let mut positional: Option<usize> = None;
     for raw in split_top_level(&sig) {
-        // `self`, the positional-only marker and the keyword-only marker
-        // carry no keyword of their own.
-        if raw == "self" || raw == "/" || raw == "*" {
+        // `self` and the positional-only marker carry no keyword of
+        // their own.
+        if raw == "self" || raw == "/" {
             continue;
         }
         if raw.starts_with("**") {
             kwargs = true;
             continue;
         }
-        // `*args` collects positionals; a keyword can never reach it.
+        // A bare `*`, or `*args` which collects positionals: a keyword can
+        // never reach it, and what follows is keyword-only.
         if raw.starts_with('*') {
+            positional.get_or_insert(params.len());
             continue;
         }
         if let Some(p) = parse_param(&raw) {
             params.push(p);
         }
     }
-    (params, kwargs)
+    let positional = positional.unwrap_or(params.len());
+    (params, kwargs, positional)
 }
 
 /// Split a parameter list on top-level commas only: a default like
@@ -1418,6 +1752,182 @@ pub(crate) fn edit_distance(a: &str, b: &str) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn calls_through_keeps_arguments_await_and_text() {
+        let src = "async def on(psu, log):\n    v = await psu.read(1)\n    psu.set(\n        3.3,\n        channel=f\"ch{v}\",\n    )\n    log.info(\"psu.fake(x=1)\")\n    psu.cfg(**opts)\n    await other(psu.mode())\n";
+        let calls = calls_through(src, "on", "psu").unwrap();
+        let read = &calls[0];
+        assert_eq!((read.method.as_str(), read.awaited), ("read", true));
+        assert_eq!(read.text, "psu.read(1)");
+        let set = &calls[1];
+        assert_eq!(set.args, vec!["3.3", "channel=f\"ch{v}\""]);
+        assert_eq!(
+            set.keywords().collect::<Vec<_>>(),
+            vec!["channel=f\"ch{v}\""]
+        );
+        assert_eq!(set.positional().collect::<Vec<_>>(), vec!["3.3"]);
+        assert!(!set.awaited);
+        // A call written in a string is not a call.
+        assert_eq!(calls[2].method, "cfg");
+        assert_eq!(calls[2].keywords().collect::<Vec<_>>(), vec!["**opts"]);
+        // Awaiting what the call is passed to is not awaiting the call.
+        assert_eq!(
+            (calls[3].method.as_str(), calls[3].awaited),
+            ("mode", false)
+        );
+        assert_eq!(calls.len(), 4);
+        // A comparison is no keyword.
+        let cmp = calls_through("def f(psu):\n    psu.check(a == 1)\n", "f", "psu").unwrap();
+        assert_eq!(cmp[0].keywords().count(), 0);
+    }
+
+    #[test]
+    fn class_properties_reads_decorators_and_assignments() {
+        let src = "import functools\n\nclass Psu:\n    @property\n    def voltage(self):\n        return 1\n\n    @voltage.setter\n    def voltage(self, v):\n        pass\n\n    @functools.cached_property\n    def idn(self):\n        return ''\n\n    @staticmethod\n    def helper():\n        pass\n\n    current = property(lambda self: 0)\n\n    def read(self):\n        @property\n        def inner(self):\n            pass\n";
+        assert_eq!(
+            class_properties(src, "Psu"),
+            Some(vec![
+                "voltage".to_string(),
+                "voltage".to_string(),
+                "idn".to_string(),
+                "current".to_string()
+            ])
+        );
+        assert_eq!(class_properties(src, "Nope"), None);
+    }
+
+    #[test]
+    fn method_signature_skips_self_and_cls() {
+        let src = "class Psu:\n    def set(self, voltage,\n            channel=1, **extra):\n        pass\n\n    @classmethod\n    def make(cls, port):\n        pass\n";
+        let sig = method_signature(src, "Psu", "set").unwrap();
+        let (params, kwargs) = (sig.params, sig.kwargs);
+        assert_eq!(
+            params.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(),
+            vec!["voltage", "channel"]
+        );
+        assert!(kwargs);
+        let params = method_signature(src, "Psu", "make").unwrap().params;
+        assert_eq!(params[0].name, "port");
+        assert!(method_signature(src, "Psu", "missing").is_none());
+    }
+
+    #[test]
+    fn a_class_under_if_or_try_is_read_like_a_top_level_one() {
+        let src = "import sys\n\ntry:\n    import pyvisa\nexcept ImportError:\n    pyvisa = None\n\nif sys.platform == 'win32':\n    @decorate\n    class Psu(Base):\n        \"\"\"Docstring.\n\n    Dedented continuation.\n        \"\"\"\n        def __init__(self, port):\n            self.port = port\n\n        @property\n        def voltage(self):\n            return 1\n\n        def read_voltage(self, ch):\n            return 1.0\n\ndef helper():\n    class Hidden:\n        pass\n";
+        assert_eq!(top_level_classes(src), vec!["Psu"]);
+        assert_eq!(
+            class_members(src, "Psu"),
+            Some(vec![
+                "__init__".to_string(),
+                "port".to_string(),
+                "voltage".to_string(),
+                "read_voltage".to_string()
+            ])
+        );
+        assert_eq!(class_bases(src, "Psu"), Some(vec!["Base".to_string()]));
+        assert_eq!(
+            class_properties(src, "Psu"),
+            Some(vec!["voltage".to_string()])
+        );
+        let init = init_signature(src, "Psu").unwrap();
+        assert_eq!(init.params[0].name, "port");
+        assert_eq!(
+            method_signature(src, "Psu", "read_voltage").unwrap().params[0].name,
+            "ch"
+        );
+        // A class nested in a function is no module-level class.
+        assert!(class_members(src, "Hidden").is_none());
+    }
+
+    #[test]
+    fn a_full_width_space_in_a_guarded_docstring_does_not_panic() {
+        let src = "import sys\nif sys.platform:\n    class Psu:\n        \"\"\"電源.\n\u{3000}\u{3000}説明\n        \"\"\"\n        def set(self, v):\n            pass\n";
+        assert_eq!(class_members(src, "Psu"), Some(vec!["set".to_string()]));
+        assert_eq!(
+            method_signature(src, "Psu", "set").unwrap().params[0].name,
+            "v"
+        );
+    }
+
+    #[test]
+    fn method_signature_knows_keyword_only_parameters() {
+        let src = "class Psu:\n    def kwo(self, *, channel):\n        pass\n\n    def star(self, *values, channel=1):\n        pass\n\n    def both(self, a, /, b, *, c):\n        pass\n";
+        assert_eq!(method_signature(src, "Psu", "kwo").unwrap().positional, 0);
+        let star = method_signature(src, "Psu", "star").unwrap();
+        assert_eq!((star.params.len(), star.positional), (1, 0));
+        assert_eq!(method_signature(src, "Psu", "both").unwrap().positional, 2);
+    }
+
+    #[test]
+    fn method_signature_skips_nested_functions_and_overload_stubs() {
+        let src = "from typing import overload\n\nclass Psu:\n    def configure(self):\n        def set(x):\n            pass\n\n    @overload\n    def set(self, v: int) -> None: ...\n    @typing.overload\n    def set(self, v: str, ch: int) -> None: ...\n    def set(self, voltage, channel=1):\n        pass\n";
+        let names: Vec<String> = method_signature(src, "Psu", "set")
+            .unwrap()
+            .params
+            .into_iter()
+            .map(|p| p.name)
+            .collect();
+        assert_eq!(names, vec!["voltage", "channel"]);
+    }
+
+    #[test]
+    fn await_on_a_chain_is_not_await_on_the_call() {
+        let src = "async def on(psu):\n    a = await psu.f().strip()\n    b = await psu.g()[0]\n    c = await psu.h()\n";
+        let calls = calls_through(src, "on", "psu").unwrap();
+        let awaited: Vec<(&str, bool)> = calls
+            .iter()
+            .map(|c| (c.method.as_str(), c.awaited))
+            .collect();
+        assert_eq!(awaited, vec![("f", false), ("g", false), ("h", true)]);
+    }
+
+    #[test]
+    fn method_signature_reads_statements_not_physical_lines() {
+        let black = "class Psu:\n    def configure(\n        self,\n    ) -> None:\n        def set(x):\n            pass\n\n    def set(self, voltage, channel=1):\n        pass\n";
+        assert_eq!(
+            method_signature(black, "Psu", "set").unwrap().params[0].name,
+            "voltage"
+        );
+        for deco in [
+            "@typing_extensions.overload",
+            "@t.overload",
+            "@ typing.overload",
+        ] {
+            let src = format!("class Psu:\n    {deco}\n    def set(self, v: int) -> None: ...\n    def set(self, voltage, channel=1):\n        pass\n");
+            assert_eq!(
+                method_signature(&src, "Psu", "set").unwrap().params[0].name,
+                "voltage",
+                "{deco}"
+            );
+        }
+        let multi = "class Psu:\n    @overload\n    @deco(\n        a=1,\n    )\n    def set(self, v: int) -> None: ...\n    def set(self, voltage, channel=1):\n        pass\n";
+        assert_eq!(
+            method_signature(multi, "Psu", "set").unwrap().params[0].name,
+            "voltage"
+        );
+        assert_eq!(
+            class_properties(
+                "class Psu:\n    @ property\n    def v(self):\n        return 1\n",
+                "Psu"
+            ),
+            Some(vec!["v".to_string()])
+        );
+    }
+
+    #[test]
+    fn a_class_cut_by_an_open_bracket_has_no_known_init() {
+        let src = "class Psu:\n    X = dict(\n    def __init__(self, port):\n        pass\n";
+        assert!(init_signature(src, "Psu").is_none());
+    }
+
+    #[test]
+    fn a_class_defined_under_two_guards_is_not_read() {
+        let src = "import sys\n\nif sys.platform == 'win32':\n    class Psu:\n        def read(self):\n            pass\nelse:\n    class Psu:\n        def fetch(self):\n            pass\n";
+        assert_eq!(top_level_classes(src), vec!["Psu"]);
+        assert!(class_members(src, "Psu").is_none());
+        assert!(class_properties(src, "Psu").is_none());
+    }
 
     #[test]
     fn a_one_line_function_body_is_read() {

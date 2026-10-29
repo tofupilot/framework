@@ -46,6 +46,10 @@ pub struct Diagnostic {
     pub column: Option<u32>,
     /// The replacement the message suggests (`plugs.psu:PowerSupply`),
     /// for a tool that wants to apply it rather than read the sentence.
+    /// For the YAML value at `line`/`column`, except the plug-call codes
+    /// (`phase_plug_call_*`, `phase_plug_method_unknown`): there it is
+    /// Python, the corrected call or method name in the phase's function,
+    /// which the YAML line only points to.
     pub hint: Option<String>,
     /// The message without the entity or path `render` already states.
     detail: String,
@@ -117,11 +121,19 @@ impl Diagnostic {
             // The fix belongs in the sequence file, not at the `uses:`
             // the problem is located at: the message names it.
             // A missing parameter's did-you-mean is a rename in the
-            // Python file, not a value for this YAML path.
+            // Python file, not a value for this YAML path; so is a plug
+            // call's, which sets its own hint when it has one.
             hint: p.hint.clone().or_else(|| {
-                (!p.at_sequence_call() && p.code != codes::PHASE_MISSING_PARAM)
-                    .then(|| suggestion(&p.message))
-                    .flatten()
+                (!p.at_sequence_call()
+                    && ![
+                        codes::PHASE_MISSING_PARAM,
+                        codes::PHASE_PLUG_CALL_KEYWORD,
+                        codes::PHASE_PLUG_CALL_AWAITED,
+                        codes::PHASE_PLUG_PROPERTY_CALLED,
+                    ]
+                    .contains(&p.code))
+                .then(|| suggestion(&p.message))
+                .flatten()
             }),
             detail: p.detail().to_string(),
             message: p.message,
@@ -316,6 +328,43 @@ mod tests {
         assert!(lint.definition.is_none());
         assert_eq!(lint.diagnostics.len(), 1);
         assert_eq!(lint.diagnostics[0].code, codes::PARSE_ERROR);
+    }
+
+    #[test]
+    fn a_plug_call_finding_keeps_its_own_hint() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("plugs")).unwrap();
+        std::fs::write(
+            dir.path().join("plugs/psu.py"),
+            "class Psu:\n    def set(self, voltage, channel=1):\n        pass\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("steps.py"),
+            "async def on(psu):\n    psu.set(voltag=1)\n    psu.set(1, channel=2)\n    await psu.set(1)\n",
+        )
+        .unwrap();
+        let text = "name: t\nplugs:\n  - key: psu\n    name: PSU\n    python: plugs.psu:Psu\nmain:\n  - key: on\n    name: On\n    python: steps:on\n";
+        let lint = lint_text(dir.path(), text);
+        let hints = |code: &str| -> Vec<Option<String>> {
+            lint.diagnostics
+                .iter()
+                .filter(|d| d.code == code)
+                .map(|d| d.hint.clone())
+                .collect()
+        };
+        // The did-you-mean names a Python parameter, not a value for the
+        // phase's `python:`: no hint.
+        assert_eq!(
+            hints("phase_plug_call_keyword"),
+            vec![None, Some("psu.set(1, 2)".to_string())],
+            "{:#?}",
+            lint.diagnostics
+        );
+        assert_eq!(
+            hints("phase_plug_call_awaited"),
+            vec![Some("psu.set(1)".to_string())]
+        );
     }
 
     #[test]
