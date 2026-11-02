@@ -284,6 +284,120 @@ class StdlibLoggingBridge(logging.Handler):
             pass
 
 
+# Same switch and filter as the worker's (`tp_worker.py`): on a verbose
+# run, the plug's own DEBUG records are captured too, never a library's.
+LOG_VERBOSE = os.environ.get("TOFUPILOT_LOG_VERBOSE") == "1"
+
+
+class OwnDebugOnly(logging.Filter):
+    """INFO and above from anywhere, DEBUG only from outside installed
+    packages and the standard library."""
+
+    _library_roots = None
+
+    def filter(self, record):
+        if record.levelno >= logging.INFO:
+            return True
+        if OwnDebugOnly._library_roots is None:
+            import sysconfig
+
+            paths = sysconfig.get_paths()
+            OwnDebugOnly._library_roots = tuple(
+                {
+                    os.path.normcase(os.path.abspath(paths[key]))
+                    for key in ("stdlib", "platstdlib", "purelib", "platlib")
+                    if paths.get(key)
+                }
+            )
+        path = os.path.normcase(os.path.abspath(record.pathname or ""))
+        parts = path.split(os.sep)
+        if "site-packages" in parts or "dist-packages" in parts:
+            return False
+        return not any(
+            path == root or path.startswith(root + os.sep)
+            for root in OwnDebugOnly._library_roots
+        )
+
+
+class _LoweredRootGate(logging.Filter):
+    """On a handler the procedure attached to the root logger: drops the
+    DEBUG records that reach it only because the root's level was lowered
+    for the bridge, so it receives what it would on a default run. On a
+    verbose run it would otherwise print every library's DEBUG, to the
+    captured stderr where each line reads as a WARNING. A record from a
+    logger with its own level got there by that level and passes, and so
+    does any record above a level the procedure set on the root itself."""
+
+    def __init__(self, previous_effective):
+        super().__init__()
+        self.floor_at(previous_effective)
+
+    def floor_at(self, level):
+        self._floor = min(level, logging.INFO)
+
+    def filter(self, record):
+        if record.levelno >= self._floor:
+            return True
+        loggers = logging.Logger.manager.loggerDict
+        name = record.name
+        while name:
+            logger = loggers.get(name)
+            if isinstance(logger, logging.Logger) and logger.level != logging.NOTSET:
+                return True
+            name = name.rpartition(".")[0]
+        return False
+
+
+def _install_logging_bridge(bridge, threshold):
+    """Attach `bridge` to the root logger, lowering the root's level to
+    `threshold` when it sits above it. Every other handler on the root,
+    there now or attached later by the procedure (a phase module, a plug's
+    `__init__`, a running phase), is gated, and a level the procedure sets
+    on the root becomes the gate's. Returns the function that puts
+    everything back."""
+    root_logger = logging.getLogger()
+    previous_root_level = root_logger.level
+    previous_effective = root_logger.getEffectiveLevel()
+    gate = _LoweredRootGate(previous_effective)
+    gated = []
+    restored = False
+
+    def gate_handler(handler):
+        if handler is not bridge and handler not in gated:
+            handler.addFilter(gate)
+            gated.append(handler)
+
+    def add_handler(handler):
+        logging.Logger.addHandler(root_logger, handler)
+        if not restored:
+            gate_handler(handler)
+
+    def set_level(level):
+        logging.Logger.setLevel(root_logger, level)
+        if not restored:
+            gate.floor_at(root_logger.getEffectiveLevel())
+
+    root_logger.addHandler(bridge)
+    if previous_effective > threshold:
+        root_logger.setLevel(threshold)
+        for handler in list(root_logger.handlers):
+            gate_handler(handler)
+        root_logger.addHandler = add_handler
+        root_logger.setLevel = set_level
+
+    def restore():
+        nonlocal restored
+        restored = True
+        root_logger.__dict__.pop("addHandler", None)
+        root_logger.__dict__.pop("setLevel", None)
+        root_logger.removeHandler(bridge)
+        for handler in gated:
+            handler.removeFilter(gate)
+        root_logger.setLevel(previous_root_level)
+
+    return restore
+
+
 class LogCapturingStream:
     """sys.stdout / sys.stderr of the plug process: each complete line
     becomes one log entry at `level`."""
@@ -373,12 +487,12 @@ class PlugHandler:
         # A plug's `logging` records keep their level and source, as a
         # phase's do. The root's default WARNING threshold would drop INFO
         # before the bridge; loggers with their own level still filter.
+        threshold = logging.DEBUG if LOG_VERBOSE else logging.INFO
         bridge = StdlibLoggingBridge()
-        bridge.setLevel(logging.INFO)
-        root_logger = logging.getLogger()
-        root_logger.addHandler(bridge)
-        if root_logger.getEffectiveLevel() > logging.INFO:
-            root_logger.setLevel(logging.INFO)
+        bridge.setLevel(threshold)
+        if LOG_VERBOSE:
+            bridge.addFilter(OwnDebugOnly())
+        _install_logging_bridge(bridge, threshold)
 
         # Add procedure directory to path
         if str(procedure_dir) not in sys.path:

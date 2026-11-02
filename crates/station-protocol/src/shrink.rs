@@ -801,6 +801,7 @@ mod tests {
             timestamp: None,
             file: Some("phases/rails.py".to_string()),
             line: Some(42),
+            tier: 0,
             execution_id: None,
         };
         let shrunk = event.shrink_to_fit(MAX_EVENT_BYTES).expect("degradable");
@@ -827,6 +828,7 @@ mod tests {
             timestamp: None,
             file: None,
             line: None,
+            tier: 0,
             execution_id: None,
         };
         let shrunk = event.shrink_to_fit(MAX_EVENT_BYTES).expect("degradable");
@@ -843,6 +845,7 @@ mod tests {
             timestamp: None,
             file: None,
             line: None,
+            tier: 0,
         };
         let event = StationEvent::PhaseComplete {
             phase_key: "1_supply_check".to_string(),

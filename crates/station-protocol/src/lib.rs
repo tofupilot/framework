@@ -318,6 +318,9 @@ pub enum StationEvent {
         file: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         line: Option<u32>,
+        /// Verbosity the line belongs to, as on `PhaseLogLine`.
+        #[serde(skip_serializing_if = "is_default_tier", default = "default_tier")]
+        tier: u8,
         /// Per-run identity from `RunStarted`. Reducer drops cross-run leaks.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         execution_id: Option<String>,
@@ -624,6 +627,9 @@ pub enum StationEvent {
         file: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         line: Option<u32>,
+        /// Verbosity the line belongs to, as on `PhaseLogLine`.
+        #[serde(skip_serializing_if = "is_default_tier", default = "default_tier")]
+        tier: u8,
         /// Per-run identity from `RunStarted`. Reducer drops cross-run leaks.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         execution_id: Option<String>,
@@ -950,6 +956,17 @@ impl StationEvent {
 
 fn one() -> u32 {
     1
+}
+
+// `default` last on the fields, so the TS export of `PhaseLogLine` reads
+// `tier?: number`. The `phase_log` and `plug_log` events export a required
+// `tier: number` all the same, and omit it at 0: readers use `?? 0`.
+fn default_tier() -> u8 {
+    0
+}
+
+fn is_default_tier(tier: &u8) -> bool {
+    *tier == 0
 }
 
 /// Commands published by dashboard to the commands channel (Dashboard -> CLI).
@@ -2839,6 +2856,12 @@ pub struct PhaseLogLine {
     pub file: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line: Option<u32>,
+    /// Verbosity the line belongs to: 0 shows by default, 1 with `-v`.
+    /// Set by the CLI from the level and the origin (the procedure's own
+    /// code, or an installed library). A run only sends the tiers it
+    /// shows, except Studio's, which sends 1 and filters in the page.
+    #[serde(skip_serializing_if = "is_default_tier", default = "default_tier")]
+    pub tier: u8,
 }
 
 /// A measurement result emitted with PhaseComplete.
