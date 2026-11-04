@@ -3,18 +3,22 @@
 //!
 //! Loading stays structural (`inspect_procedure_definition` parses a
 //! string); this step is the one that reads other files. For every call
-//! it locates the sequence file (relative to the file holding the call,
-//! or inside a Python package), refuses cycles and over-deep nesting,
-//! resolves the call's `with:` against the file's `inputs:` and
-//! substitutes the `{inputs.<name>}` markers in the file's YAML, binds the
+//! it locates the sequence file (from the project root for a call in the
+//! procedure, from the holding file in a sequence file, or inside a
+//! Python package), refuses cycles and over-deep nesting, resolves the
+//! call's `with:` against the file's `inputs:` (a `file` input carried
+//! from the project root), then fills the file's YAML: the
+//! `{inputs.<name>}` markers are substituted and every path field
+//! (`python:`, `working_directory`, component images, `ui.panel`) is
+//! written from the project root in the same pass (`anchor_path`), since
+//! the worker and the operator UI resolve them from there and only this
+//! pass sees both what the file writes and the values. It binds the
 //! file's plug requirements to the procedure's plugs, then expands the
 //! file's phases with:
 //!
 //! - keys prefixed by the call's instance key (`calib/zero`), so two calls
 //!   of one file never collide and the orchestrator addresses them as it
 //!   addresses any phase;
-//! - `python:` and `working_directory` rewritten into the procedure
-//!   directory's frame, since the worker resolves them from there;
 //! - the sequence's own barriers as implicit `depends_on`: its main waits
 //!   for its setup, its teardown for its setup and main;
 //! - `sequence_path` / `sequence_stages` / `inputs` / `plug_aliases` /
@@ -63,7 +67,7 @@ impl SequenceLocator for FsSequenceLocator {
     fn locate(&self, reference: &str, base_dir: &Path) -> Result<PathBuf, String> {
         if let Some((package, _)) = split_package_reference(reference) {
             return Err(format!(
-                "`{reference}` names a file of Python package `{package}`, which needs the procedure's Python environment to be found: run from the procedure directory with its environment, or write a path relative to this file"
+                "`{reference}` names a file of Python package `{package}`, which needs the project's Python environment to be found: create it first (`tofupilot run` builds it at the project root), or write a relative path"
             ));
         }
         resolve_file_reference(reference, base_dir)
@@ -136,7 +140,7 @@ fn locate_in_package(
         let stderr = String::from_utf8_lossy(&output.stderr);
         let last = stderr.lines().last().unwrap_or("").trim();
         return Err(format!(
-            "`{reference}`: package `{package}` is not installed in the procedure's environment ({last}). Add it to pyproject.toml, or write a path relative to this file"
+            "`{reference}`: package `{package}` is not installed in the procedure's environment ({last}). Add it to pyproject.toml, or write a relative path"
         ));
     }
     let path = PathBuf::from(String::from_utf8_lossy(&output.stdout).trim());
@@ -195,18 +199,13 @@ pub fn resolve_file_reference(reference: &str, base_dir: &Path) -> Result<PathBu
         return Err("`uses:` is empty: name the sequence file".to_string());
     }
     let as_path = Path::new(reference);
-    let windows_drive = reference.as_bytes().get(1).is_some_and(|b| *b == b':')
-        && reference
-            .chars()
-            .next()
-            .is_some_and(|c| c.is_ascii_alphabetic());
-    if as_path.is_absolute()
-        || reference.starts_with('/')
-        || reference.starts_with('~')
-        || windows_drive
-    {
+    // A `uses:` has no callable, so a letter and a colon can only be a
+    // drive, with or without a separator after it.
+    let drive_led =
+        reference.as_bytes().get(1) == Some(&b':') && reference.as_bytes()[0].is_ascii_alphabetic();
+    if is_machine_path(reference) || drive_led || reference.starts_with('~') {
         return Err(format!(
-            "`{reference}`: absolute paths and `~` do not travel with a deployment; write the path relative to this file"
+            "`{reference}`: absolute paths and `~` do not travel with a deployment; write a relative path (from the project root in a procedure, from the sequence file in a sequence file)"
         ));
     }
     let ext = as_path
@@ -231,13 +230,19 @@ pub fn resolve_file_reference(reference: &str, base_dir: &Path) -> Result<PathBu
 
 /// Collapse `.` and `..` without touching the disk, so a missing file is
 /// reported at the path the author meant.
-fn normalize_lexically(path: &Path) -> PathBuf {
+pub(crate) fn normalize_lexically(path: &Path) -> PathBuf {
     let mut out = PathBuf::new();
     for component in path.components() {
         match component {
             Component::CurDir => {}
+            // `..` cancels a named folder only: past the start, or after
+            // another `..`, it stays, so `sequences/../../x` keeps climbing
+            // instead of landing on `x` at the root.
             Component::ParentDir => {
-                if !out.pop() {
+                let climbable = matches!(out.components().next_back(), Some(Component::Normal(_)));
+                if climbable {
+                    out.pop();
+                } else {
                     out.push("..");
                 }
             }
@@ -245,6 +250,84 @@ fn normalize_lexically(path: &Path) -> PathBuf {
         }
     }
     out
+}
+
+/// A component image or panel source as a path relative to its anchor,
+/// with a leading `./` dropped. `None` for what is not a file of the
+/// project as written: a URL or data URI, an absolute path, `~`, an empty
+/// value, or a value with a `{...}` marker, filled at run time from the
+/// caller's side.
+pub(crate) fn relative_file_ref(src: &str) -> Option<&str> {
+    let src = src.trim();
+    if src.is_empty() || src.contains('{') {
+        return None;
+    }
+    let has_scheme = src.split_once(':').is_some_and(|(scheme, _)| {
+        !scheme.is_empty()
+            && scheme
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '.' | '-'))
+    });
+    if has_scheme
+        || src.starts_with('/')
+        || src.starts_with('\\')
+        || src.starts_with('~')
+        || Path::new(src).is_absolute()
+    {
+        return None;
+    }
+    Some(src.strip_prefix("./").unwrap_or(src))
+}
+
+/// The input a written value starts with, whatever follows it:
+/// `{inputs.stem}.png` and `{inputs.dir}/x.png` name `stem` and `dir`,
+/// `images/{inputs.variant}.png` names nothing.
+fn leading_input(written: &str) -> Option<&str> {
+    let first = super::markers::find_markers(written).into_iter().next()?;
+    if first.start != 0 {
+        return None;
+    }
+    // The marker owns its `field`: the name is sliced from the written text.
+    match &first.reference {
+        super::markers::MarkerRef::Namespaced { namespace, .. } if namespace == "inputs" => written
+            [..first.end]
+            .strip_prefix("{inputs.")?
+            .strip_suffix('}'),
+        _ => None,
+    }
+}
+
+/// The input a written value takes whole, or as the folder it continues
+/// with a `/`: `{inputs.ref}` and `{inputs.dir}/photo.png` name `ref` and
+/// `dir`; `{inputs.variant}.png` and `images/{inputs.variant}.png` name
+/// nothing, the file composed those itself (from a `string` input).
+fn passed_input(written: &str) -> Option<&str> {
+    let name = leading_input(written)?;
+    let rest = &written[format!("{{inputs.{name}}}").len()..];
+    (rest.is_empty() || rest.starts_with('/')).then_some(name)
+}
+
+/// Whether a written value belongs to the caller: it starts with one of
+/// `file_inputs`, already written from the project root, whatever follows
+/// (`{inputs.stem}.png`), or takes another input whole or as a folder.
+fn from_caller(written: &str, file_inputs: &HashSet<String>) -> bool {
+    leading_input(written).is_some_and(|name| file_inputs.contains(name))
+        || passed_input(written).is_some()
+}
+
+/// A component image or panel written in a sequence file, relative to the
+/// procedure root like the file's `python:`. `None` leaves the value as
+/// written (`relative_file_ref`).
+fn rebase_file_ref(src: &str, rel_dir: &str) -> Option<String> {
+    if rel_dir.is_empty() {
+        return None;
+    }
+    // `..` collapsed: `sequences/../panels/a.html` is `panels/a.html`,
+    // which the kiosk and the panel loader accept where the raw form is
+    // refused.
+    let rel = relative_file_ref(src)?;
+    let joined = normalize_lexically(&Path::new(rel_dir).join(rel));
+    Some(joined.to_string_lossy().replace('\\', "/"))
 }
 
 /// `to` relative to `from`, both directories, as a `/`-joined string the
@@ -285,12 +368,13 @@ pub fn expand_procedure(
     expand_procedure_rooted(raw, procedure_dir, procedure_dir, locator)
 }
 
-/// `expand_procedure` for a procedure whose `python:` references resolve
-/// against another directory than the one holding its file: a deployment
-/// whose manifest `entry_point` names a YAML in a subdirectory resolves
-/// them against the package directory. `uses:` references still resolve
-/// from the file; only the rebase of the sequence phases' Python specs
-/// uses `python_root`, so they land where the worker will look.
+/// `expand_procedure` for a procedure whose references resolve against
+/// another directory than the one holding its file: a deployment whose
+/// manifest `entry_point` names a YAML in a subdirectory, or a local
+/// procedure file below its `pyproject.toml`. Its `uses:` and `python:`
+/// resolve from `python_root`, and the sequence phases' specs are rebased
+/// onto it, so they land where the worker will look. `procedure_dir`
+/// only serves the refusal of a `uses:` written from the file's folder.
 pub fn expand_procedure_rooted(
     raw: ProcedureYaml,
     procedure_dir: &Path,
@@ -317,10 +401,14 @@ pub fn expand_procedure_rooted(
         stack: Vec::new(),
     };
 
+    // A procedure's `uses:` resolves from the project root, like its
+    // `python:`: the two differ only for a procedure file in a subfolder
+    // of its project, and one spelling must reach the file both locally
+    // and on the station.
     let frame = Frame {
         path: Vec::new(),
         stages: Vec::new(),
-        base_dir: procedure_dir.to_path_buf(),
+        base_dir: python_root.to_path_buf(),
         file: None,
         rel_dir: String::new(),
         inputs: BTreeMap::new(),
@@ -407,6 +495,21 @@ struct Ctx<'a> {
     stack: Vec<(PathBuf, String)>,
 }
 
+/// Where the paths of one sequence call are written from. `caller` is the
+/// calling file's folder and `file` the sequence file's, both relative to
+/// the project root (`Frame::rel_dir`), `file_dir` that folder on disk.
+/// `written_with` is the call's `with:` as the calling file writes it,
+/// markers in place: the procedure's own entry, or the calling sequence
+/// file read without its types, which a marker never breaks.
+struct CallDirs<'a> {
+    written_with: Option<&'a BTreeMap<String, serde_json::Value>>,
+    /// The calling file's `file` inputs, empty for the procedure.
+    caller_file_inputs: &'a HashSet<String>,
+    caller: &'a str,
+    file: &'a str,
+    file_dir: &'a Path,
+}
+
 /// What the entries of one list inherit from the file and call they sit
 /// in.
 #[derive(Clone)]
@@ -422,8 +525,8 @@ struct Frame {
     base_dir: PathBuf,
     /// That file, `None` for the procedure.
     file: Option<PathBuf>,
-    /// `base_dir` relative to the procedure directory, `/`-joined; empty
-    /// for the procedure.
+    /// `base_dir` relative to the project root (the `python_root`),
+    /// `/`-joined; empty for the procedure and for a file at the root.
     rel_dir: String,
     inputs: BTreeMap<String, serde_json::Value>,
     /// Plug parameter name in this file to procedure plug key.
@@ -479,28 +582,32 @@ impl<'a> Ctx<'a> {
         entries: &[PhaseEntryYaml],
         frame: &Frame,
         stage: PhaseStage,
-        // The same list as the sequence file writes it, markers in place
-        // (see `written_lists`). `None` for the procedure's own lists, which
-        // have no substituted form. An entry with a marker in a typed field
-        // (`limit: "{inputs.n}"`) has no written form of its own (`None` in
-        // the list), its siblings keep theirs.
-        written: Option<&[Option<PhaseEntryYaml>]>,
+        // The sequence file's own forms of the list (`FileForms`). `None`
+        // for the procedure's own lists, which have no substituted form.
+        forms: Option<&FileForms>,
     ) -> Vec<PhaseDefinition> {
+        let list = list_name(stage);
         let mut out = Vec::new();
         for (index, entry) in entries.iter().enumerate() {
-            let written_entry = written.and_then(|w| w.get(index)).and_then(|e| e.clone());
+            let written_entry = forms
+                .and_then(|f| f.written.list(stage).get(index))
+                .and_then(|e| e.clone());
             match entry {
                 PhaseEntryYaml::Phase(yaml) => {
                     let written_phase = match written_entry {
                         Some(PhaseEntryYaml::Phase(y)) => Some(*y),
                         _ => None,
                     };
+                    let python_as_written = forms
+                        .and_then(|f| f.python_as_written.get(&(list, index)))
+                        .cloned();
                     out.push(self.expand_phase(
                         (**yaml).clone(),
                         frame,
                         stage,
                         index,
                         written_phase,
+                        python_as_written,
                     ));
                 }
                 PhaseEntryYaml::Uses(call) => {
@@ -508,7 +615,7 @@ impl<'a> Ctx<'a> {
                         Some(PhaseEntryYaml::Uses(w)) => Some(w),
                         _ => None,
                     };
-                    out.extend(self.expand_call(call, written_call, frame, stage, index));
+                    out.extend(self.expand_call(call, written_call, forms, frame, stage, index));
                 }
             }
         }
@@ -522,6 +629,9 @@ impl<'a> Ctx<'a> {
         stage: PhaseStage,
         index: usize,
         written: Option<super::schema::PhaseDefinitionYaml>,
+        // The `python:` the fill rewrote from the sequence file's folder,
+        // as written (`PhaseSource::python_as_written`).
+        python_as_written: Option<String>,
     ) -> PhaseDefinition {
         // `dashboard` is the parameter the worker fills in with the API
         // client, before plug keys and phase results: a phase keyed so is
@@ -608,32 +718,14 @@ impl<'a> Ctx<'a> {
             file,
             list: stage,
             index,
+            python_as_written,
         });
-        if let Some(spec) = &phase.python {
-            // A dotted spec names an installed module when nothing in the
-            // sequence file's directory could be it: no file for the
-            // module and no folder or module for its first segment. It
-            // then stays as written, so the worker's import fallback
-            // applies as it does for a phase of the procedure. A missing
-            // file under a folder that exists is a typo, and keeps the
-            // rebased path the ref check reports as "file not found".
-            let rebased = rebase_python_spec(spec, &frame.rel_dir);
-            phase.python =
-                if names_installed_module(spec, &rebased, &frame.base_dir, self.python_root) {
-                    Some(spec.clone())
-                } else {
-                    Some(rebased)
-                };
-        }
+        // Every path of the entry was written from the project root by the
+        // fill (`anchor_path`). What is left is the default: a command
+        // without `working_directory` runs in the sequence file's folder.
         if let Some(exec) = &mut phase.executable {
-            if !frame.rel_dir.is_empty() {
-                match &exec.working_directory {
-                    Some(wd) if !Path::new(wd).is_absolute() => {
-                        exec.working_directory = Some(format!("{}/{}", frame.rel_dir, wd));
-                    }
-                    Some(_) => {}
-                    None => exec.working_directory = Some(frame.rel_dir.clone()),
-                }
+            if exec.working_directory.is_none() && !frame.rel_dir.is_empty() {
+                exec.working_directory = Some(frame.rel_dir.clone());
             }
         }
         phase
@@ -652,6 +744,10 @@ impl<'a> Ctx<'a> {
         // form, and for an entry with a marker in a typed field, which
         // falls back to the substituted entry.
         written: Option<&SequenceCallYaml>,
+        // The enclosing sequence file's own forms (`FileForms`): its `with:`
+        // as written, read without types so a marker never hides it, and
+        // its `file` inputs. `None` for a call written in the procedure.
+        caller_forms: Option<&FileForms>,
         frame: &Frame,
         stage: PhaseStage,
         index: usize,
@@ -710,6 +806,15 @@ impl<'a> Ctx<'a> {
                 {
                     self.errors
                         .push(located(message, location).with_code(super::codes::NOT_CHECKED));
+                } else if let Some(spelling) = self.root_spelling(&call.uses, frame) {
+                    self.error(
+                        format!(
+                            "{in_file}sequence call `{label}`: `{}` is written from the procedure file's folder; a procedure's `uses:` resolves from the project root {}, like its `python:`: write `{spelling}`",
+                            call.uses,
+                            self.python_root.display()
+                        ),
+                        location,
+                    );
                 } else {
                     self.error(message, location);
                 }
@@ -744,8 +849,33 @@ impl<'a> Ctx<'a> {
             }
         };
 
-        let (seq, written_entries, inputs) =
-            match self.parse_sequence_file(&text, &file, call, &label, &location) {
+        let base_dir = file
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| self.procedure_dir.to_path_buf());
+        let child_rel_dir = relative_dir(self.python_root, &base_dir);
+        // The procedure's entry is its own written form.
+        let raw_with: Option<BTreeMap<String, serde_json::Value>> = caller_forms
+            .and_then(|f| f.tree.get(list_name(stage)))
+            .and_then(|l| l.get(index))
+            .and_then(|e| e.get("with"))
+            .and_then(|w| w.as_object())
+            .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect());
+        let written_with = if frame.top_level {
+            Some(&call.with)
+        } else {
+            raw_with.as_ref()
+        };
+        let no_file_inputs = HashSet::new();
+        let dirs = CallDirs {
+            written_with,
+            caller_file_inputs: caller_forms.map_or(&no_file_inputs, |f| &f.file_inputs),
+            caller: &frame.rel_dir,
+            file: &child_rel_dir,
+            file_dir: &base_dir,
+        };
+        let (seq, forms, inputs) =
+            match self.parse_sequence_file(&text, &file, call, &dirs, &label, &location) {
                 Some(parsed) => parsed,
                 None => return Vec::new(),
             };
@@ -802,10 +932,6 @@ impl<'a> Ctx<'a> {
         } else {
             frame.scope
         };
-        let base_dir = file
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| self.procedure_dir.to_path_buf());
         // One stage per enclosing SEQUENCE: the procedure's own list is
         // not one (the phase's `StageScope` already says it), so a call made
         // in the procedure starts the chain empty.
@@ -817,7 +943,7 @@ impl<'a> Ctx<'a> {
         let child = Frame {
             path: path.clone(),
             stages: child_stages,
-            rel_dir: relative_dir(self.python_root, &base_dir),
+            rel_dir: child_rel_dir,
             base_dir,
             file: Some(file.clone()),
             inputs: inputs.clone(),
@@ -877,24 +1003,11 @@ impl<'a> Ctx<'a> {
         });
 
         self.stack.push((canonical, call.uses.clone()));
-        let mut setup_phases = self.expand_list(
-            &seq.setup,
-            &child,
-            PhaseStage::Setup,
-            Some(&written_entries.setup),
-        );
-        let mut main_phases = self.expand_list(
-            &seq.main,
-            &child,
-            PhaseStage::Main,
-            Some(&written_entries.main),
-        );
-        let mut teardown_phases = self.expand_list(
-            &seq.teardown,
-            &child,
-            PhaseStage::Teardown,
-            Some(&written_entries.teardown),
-        );
+        let mut setup_phases =
+            self.expand_list(&seq.setup, &child, PhaseStage::Setup, Some(&forms));
+        let mut main_phases = self.expand_list(&seq.main, &child, PhaseStage::Main, Some(&forms));
+        let mut teardown_phases =
+            self.expand_list(&seq.teardown, &child, PhaseStage::Teardown, Some(&forms));
         self.stack.pop();
 
         self.check_level_keys(
@@ -976,9 +1089,9 @@ impl<'a> Ctx<'a> {
 
     /// The file as a `SequenceYaml`, read by the procedure's own reader with
     /// the `{inputs.x}` markers substituted in the text first (so every
-    /// other scalar keeps its spelling, `name: 3.10` included), plus the
-    /// file's entries as written, for the editors of the file (Studio), see
-    /// `written_lists`. `None` after reporting what is wrong, with the
+    /// other scalar keeps its spelling, `name: 3.10` included) and every
+    /// path written from the project root (`anchor_path`), plus the file's
+    /// own forms (`FileForms`). `None` after reporting what is wrong, with the
     /// sequence file's position in the message: Studio applies an error's
     /// own line to the procedure file, where the call's entry (`location`)
     /// is the place to point at.
@@ -987,13 +1100,10 @@ impl<'a> Ctx<'a> {
         text: &str,
         file: &Path,
         call: &SequenceCallYaml,
+        dirs: &CallDirs<'_>,
         label: &str,
         location: &Option<RefLocation>,
-    ) -> Option<(
-        SequenceYaml,
-        WrittenLists,
-        BTreeMap<String, serde_json::Value>,
-    )> {
+    ) -> Option<(SequenceYaml, FileForms, BTreeMap<String, serde_json::Value>)> {
         let shown = self.shown(file);
 
         // Inputs first, from the untouched text: they are what the markers
@@ -1049,26 +1159,63 @@ impl<'a> Ctx<'a> {
                 return None;
             }
         };
-        let inputs = self.resolve_inputs(&declared, call, label, &shown, location)?;
+        let inputs = self.resolve_inputs(&declared, call, dirs, label, &shown, location)?;
+
+        // The file read without its types: a marker in a typed field
+        // (`limit: "{inputs.n}"`) is plain text here, so this read never
+        // fails where the typed one would. It says which scalar is an image
+        // and what a nested call's `with:` writes.
+        let tree = super::yaml::from_str::<serde_json::Value>(text).unwrap_or_default();
+        let file_inputs: HashSet<String> = declared
+            .iter()
+            .filter(|(_, spec)| spec.input_type == super::sequence::InputType::File)
+            .map(|(name, _)| name.clone())
+            .collect();
+        let anchoring = Anchoring {
+            rel_dir: dirs.file,
+            file_dir: dirs.file_dir,
+            python_root: self.python_root,
+            file_inputs: &file_inputs,
+        };
 
         // The markers, substituted in the text: a whole marker becomes the
         // input's JSON value (valid YAML flow, so a number stays a number),
         // an embedded one interpolates into a quoted string. The `inputs:`
-        // declarations are not substituted.
+        // declarations are not substituted. A path field is written from
+        // the project root on the way (`anchor_path`): this pass sees both
+        // what the file writes and the values, so it alone decides where a
+        // path is read from.
         let mut unknown = Vec::new();
+        let mut python_as_written: HashMap<(&'static str, usize), String> = HashMap::new();
         let substituted = match super::yaml::rewrite_value_scalars(text, |scalar| {
-            marker_rewrite(scalar, &inputs, &mut unknown)
+            let Some(field) = path_field(&scalar.path, &tree) else {
+                return marker_rewrite(scalar, &inputs, &mut unknown);
+            };
+            let Some(anchored) =
+                anchor_path(field, scalar.value, &inputs, &anchoring, &mut unknown)
+            else {
+                return marker_rewrite(scalar, &inputs, &mut unknown);
+            };
+            if anchored.python_rewritten {
+                if let Some(at) =
+                    entry_of(&scalar.path).and_then(|(list, i)| Some((stage_list(&list)?, i)))
+                {
+                    python_as_written.insert(at, scalar.value.to_string());
+                }
+            }
+            (anchored.value != scalar.value)
+                .then(|| serde_json::to_string(&anchored.value).unwrap_or_else(|_| "\"\"".into()))
         }) {
             Ok(text) => text,
             // The declarations read and the deprecations are refused above,
             // so the raw text parses: what is left is a scalar the rewriter
             // cannot stand in for. Defensive: every scalar form the parser
             // emits is covered, and no file has reached this yet. The file
-            // is never read with its markers left as written.
-            Err(super::yaml::RewriteError::Scalar { line }) if text.contains("{inputs.") => {
+            // is never read with a marker or a path left as written.
+            Err(super::yaml::RewriteError::Scalar { line }) => {
                 self.error(
                     format!(
-                        "{shown}: line {line}: a `{{inputs.x}}` marker sits where it cannot be substituted; write the value as a plain, quoted or block scalar (call `{label}`)"
+                        "{shown}: line {line}: a value with an `{{inputs.x}}` marker or a path sits where it cannot be rewritten; write it as a plain or quoted scalar (call `{label}`)"
                     ),
                     location.clone(),
                 );
@@ -1129,13 +1276,37 @@ impl<'a> Ctx<'a> {
         if !declaration_problems.is_empty() {
             return None;
         }
-        Some((seq, written_lists(text, &inputs), inputs))
+        let forms = FileForms {
+            written: written_lists(text, &inputs),
+            tree,
+            python_as_written,
+            file_inputs,
+        };
+        Some((seq, forms, inputs))
+    }
+
+    /// For a `uses:` of the procedure that reaches a file only from the
+    /// procedure file's folder (the rule before the root became the
+    /// anchor): the spelling that reaches it from the root. `None`
+    /// otherwise, including for a call inside a sequence file.
+    fn root_spelling(&self, reference: &str, frame: &Frame) -> Option<String> {
+        if !frame.top_level || self.procedure_dir == self.python_root {
+            return None;
+        }
+        let file = resolve_file_reference(reference, self.procedure_dir).ok()?;
+        let dir = relative_dir(self.python_root, file.parent()?);
+        let name = file.file_name()?.to_string_lossy();
+        Some(if dir.is_empty() {
+            name.to_string()
+        } else {
+            format!("{dir}/{name}")
+        })
     }
 
     /// A sequence file as the procedure's author knows it: relative to
-    /// the procedure's folder.
+    /// the project root.
     fn shown(&self, file: &Path) -> String {
-        file.strip_prefix(self.procedure_dir)
+        file.strip_prefix(self.python_root)
             .unwrap_or(file)
             .display()
             .to_string()
@@ -1178,6 +1349,7 @@ impl<'a> Ctx<'a> {
         &mut self,
         declared: &BTreeMap<String, InputSpecYaml>,
         call: &SequenceCallYaml,
+        dirs: &CallDirs<'_>,
         label: &str,
         shown: &str,
         location: &Option<RefLocation>,
@@ -1238,6 +1410,31 @@ impl<'a> Ctx<'a> {
                     if !value.is_i64() && !value.is_u64() =>
                 {
                     serde_json::Value::from(f as i64)
+                }
+                _ => value,
+            };
+            // A `file` input is written from the folder of whoever sets it,
+            // and carried from the project root: the sequence's phases, its
+            // images and its own nested calls then read one spelling. A
+            // value the call passes through from its own inputs
+            // (`{inputs.ref}`, `{inputs.dir}/x.png`, or anything led by a
+            // `file` input, `{inputs.stem}.png`) was carried already.
+            let value = match (&spec.input_type, &value) {
+                (crate::procedure::sequence::InputType::File, serde_json::Value::String(s)) => {
+                    let from = if !call.with.contains_key(name) {
+                        Some(dirs.file)
+                    } else {
+                        match dirs.written_with.and_then(|w| w.get(name)) {
+                            Some(serde_json::Value::String(w))
+                                if from_caller(w, dirs.caller_file_inputs) =>
+                            {
+                                None
+                            }
+                            _ => Some(dirs.caller),
+                        }
+                    };
+                    from.and_then(|dir| rebase_file_ref(s, dir))
+                        .map_or(value, serde_json::Value::String)
                 }
                 _ => value,
             };
@@ -1458,33 +1655,48 @@ fn dedup_in_place(items: &mut Vec<String>) {
     items.retain(|k| seen.insert(k.clone()));
 }
 
+/// Whether a path is led by a Windows drive: a letter, a colon and a
+/// separator. `m:run` is the module `m` with its callable, not a drive.
+fn windows_drive(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    bytes.first().is_some_and(|b| b.is_ascii_alphabetic())
+        && bytes.get(1) == Some(&b':')
+        && bytes.get(2).is_some_and(|b| *b == b'/' || *b == b'\\')
+}
+
+/// A `python:` spec split into its path or module and its callable, a
+/// Windows drive letter kept with its path (`C:/a/b.py:f` is `C:/a/b.py`
+/// and `f`, not `C` and `/a/b.py`).
+pub(crate) fn split_python_spec(raw: &str) -> (String, Option<String>) {
+    match raw.split_once(':') {
+        Some((p, c)) if windows_drive(raw) => match c.split_once(':') {
+            Some((rest, callable)) => (format!("{p}:{rest}"), Some(callable.trim().to_string())),
+            None => (format!("{p}:{c}"), None),
+        },
+        Some((p, c)) => (p.trim().to_string(), Some(c.trim().to_string())),
+        None => (raw.to_string(), None),
+    }
+}
+
+/// Whether a path names a place on this machine rather than a file of the
+/// project: absolute for the host, `/`-rooted, or led by a Windows drive,
+/// whichever OS reads it.
+pub(crate) fn is_machine_path(path_part: &str) -> bool {
+    Path::new(path_part).is_absolute() || path_part.starts_with('/') || windows_drive(path_part)
+}
+
 /// A `python:` reference written in a sequence file, moved into the
-/// procedure directory's frame of reference: the worker joins module
-/// paths onto the procedure directory, so `phases.zero` in
-/// `sequences/calib/x.yaml` becomes `sequences/calib/phases/zero.py:zero`.
-/// Absolute and `~` specs are left alone (the lint refuses them).
+/// project root's frame of reference: the worker joins module paths onto
+/// the project root, so `phases.zero` in `sequences/calib/x.yaml` becomes
+/// `sequences/calib/phases/zero.py:zero`. Absolute and `~` specs are left
+/// alone (the lint warns about them).
 pub fn rebase_python_spec(spec: &PythonSpec, rel_dir: &str) -> PythonSpec {
     let raw = spec.as_str().trim();
     if rel_dir.is_empty() || raw.is_empty() {
         return spec.clone();
     }
-    // Keep a Windows drive letter with its path.
-    let (path_part, callable) = match raw.split_once(':') {
-        Some((p, c)) if p.len() == 1 && p.chars().all(|ch| ch.is_ascii_alphabetic()) => {
-            match c.split_once(':') {
-                Some((rest, callable)) => {
-                    (format!("{p}:{rest}"), Some(callable.trim().to_string()))
-                }
-                None => (format!("{p}:{c}"), None),
-            }
-        }
-        Some((p, c)) => (p.trim().to_string(), Some(c.trim().to_string())),
-        None => (raw.to_string(), None),
-    };
-    if Path::new(&path_part).is_absolute()
-        || path_part.starts_with('~')
-        || path_part.starts_with('/')
-    {
+    let (path_part, callable) = split_python_spec(raw);
+    if is_machine_path(&path_part) || path_part.starts_with('~') {
         return spec.clone();
     }
     let is_file_path = path_part.contains('/') || path_part.contains('\\');
@@ -1511,15 +1723,34 @@ pub fn rebase_python_spec(spec: &PythonSpec, rel_dir: &str) -> PythonSpec {
         };
         format!("{rel_dir}/{module}.py")
     };
-    let callable = callable.unwrap_or_else(|| {
-        path_part
-            .rsplit(['.', '/', '\\'])
-            .next()
-            .unwrap_or(&path_part)
-            .trim_end_matches(".py")
-            .to_string()
-    });
+    // The function the written spec names, by the run's own rule
+    // (`get_callable_name`, which follows `resolve_path`): moving the file
+    // under a folder changes neither its stem nor its last segment.
+    let callable = callable.unwrap_or_else(|| spec.get_callable_name());
     PythonSpec::new(format!("{file_path}:{callable}"))
+}
+
+/// A rebased spec naming a package's `__init__.py` where the run would:
+/// a folder written without `.py` is its package when it holds one, a
+/// dotted name only when no `<name>.py` exists (`PythonSpec::resolve_path`).
+fn package_init(written: &PythonSpec, rebased: PythonSpec, python_root: &Path) -> PythonSpec {
+    let (path_part, _) = split_python_spec(written.as_str().trim());
+    let (file, callable) = split_python_spec(rebased.as_str());
+    let Some(stem) = file.strip_suffix(".py") else {
+        return rebased;
+    };
+    let is_path = path_part.contains(['/', '\\']);
+    let package = python_root.join(stem).join("__init__.py");
+    let take_package = if is_path {
+        !path_part.ends_with(".py") && package.is_file()
+    } else {
+        !path_part.starts_with('.') && !python_root.join(&file).exists() && package.is_file()
+    };
+    if !take_package {
+        return rebased;
+    }
+    let callable = callable.map(|c| format!(":{c}")).unwrap_or_default();
+    PythonSpec::new(format!("{stem}/__init__.py{callable}"))
 }
 
 /// Whether a sequence phase's `python:` names a module installed in the
@@ -1654,6 +1885,200 @@ fn written_lists(text: &str, inputs: &BTreeMap<String, serde_json::Value>) -> Wr
         }
     }
     WrittenLists::default()
+}
+
+/// A sequence file's entries as it writes them, beside the typed and
+/// substituted read the run takes.
+struct FileForms {
+    /// Typed, for the editors of the file (`written_lists`).
+    written: WrittenLists,
+    /// The file read without types, markers in place: always readable.
+    tree: serde_json::Value,
+    /// (list, index) of each phase whose `python:` the fill rewrote from
+    /// the file's folder, to that `python:` as written.
+    python_as_written: HashMap<(&'static str, usize), String>,
+    /// The inputs the file declares `type: file`: a nested call's `with:`
+    /// value led by one is passed on as carried.
+    file_inputs: HashSet<String>,
+}
+
+impl WrittenLists {
+    fn list(&self, stage: PhaseStage) -> &[Option<PhaseEntryYaml>] {
+        match stage {
+            PhaseStage::Setup => &self.setup,
+            PhaseStage::Main => &self.main,
+            PhaseStage::Teardown => &self.teardown,
+        }
+    }
+}
+
+/// The key a list is written under in a sequence file.
+fn list_name(stage: PhaseStage) -> &'static str {
+    match stage {
+        PhaseStage::Setup => "setup",
+        PhaseStage::Main => "main",
+        PhaseStage::Teardown => "teardown",
+    }
+}
+
+fn stage_list(name: &str) -> Option<&'static str> {
+    ["setup", "main", "teardown"]
+        .into_iter()
+        .find(|l| *l == name)
+}
+
+/// A field of a sequence file's phase that holds a path.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum PathField {
+    Python,
+    WorkingDirectory,
+    /// A component image (an image's value, an option's image) or the
+    /// phase's panel.
+    File,
+}
+
+/// The path field a scalar's path (`main[0].ui.panel`) names, if any. An
+/// image's `default_value` is one only when its component is an image in
+/// `tree`, the file read without types.
+fn path_field(path: &str, tree: &serde_json::Value) -> Option<PathField> {
+    let mut segments: Vec<Result<&str, usize>> = Vec::new();
+    for part in path.split('.') {
+        let mut pieces = part.split('[');
+        segments.push(Ok(pieces.next()?));
+        for index in pieces {
+            segments.push(Err(index.strip_suffix(']')?.parse().ok()?));
+        }
+    }
+    let [Ok(list), Err(entry), rest @ ..] = segments.as_slice() else {
+        return None;
+    };
+    stage_list(list)?;
+    // A field the file leaves null (`panel: null`, `working_directory: ~`)
+    // holds no path: the rewriter hands it over as the text `null`, which
+    // must not be read as a file name.
+    let node = segments
+        .iter()
+        .try_fold(tree, |node, segment| match segment {
+            Ok(key) => node.get(*key),
+            Err(index) => node.get(*index),
+        })?;
+    if node.is_null() {
+        return None;
+    }
+    match rest {
+        [Ok("python")] => Some(PathField::Python),
+        [Ok("executable"), Ok("working_directory")] => Some(PathField::WorkingDirectory),
+        [Ok("ui"), Ok("panel")] => Some(PathField::File),
+        [Ok("ui"), Ok("components"), Err(_), Ok("options"), Err(_), Ok("image")] => {
+            Some(PathField::File)
+        }
+        [Ok("ui"), Ok("components"), Err(component), Ok("default_value")] => {
+            let kind = tree
+                .get(list)?
+                .get(entry)?
+                .get("ui")?
+                .get("components")?
+                .get(component)?
+                .get("type")?;
+            (kind.as_str() == Some("image")).then_some(PathField::File)
+        }
+        _ => None,
+    }
+}
+
+/// What `anchor_path` needs to know about the sequence file.
+struct Anchoring<'a> {
+    /// Its folder relative to the project root, `/`-joined.
+    rel_dir: &'a str,
+    /// Its folder on disk.
+    file_dir: &'a Path,
+    python_root: &'a Path,
+    /// The inputs it declares `type: file`.
+    file_inputs: &'a HashSet<String>,
+}
+
+struct Anchored {
+    value: String,
+    /// A `python:` the file wrote, rewritten from the file's folder.
+    python_rewritten: bool,
+}
+
+/// The value of a sequence file's path field, filled and written from the
+/// project root: the one place a sequence's paths are anchored. `raw` is
+/// the scalar as the file writes it. `None` leaves the scalar to
+/// `marker_rewrite`: a whole marker whose value is not text, or names no
+/// input.
+///
+/// - What the file writes, a name built around a marker included
+///   (`images/{inputs.v}.png`, `phases.{inputs.v}:run`), is read from the
+///   file's folder.
+/// - A value taken whole from an input, or continued as a folder
+///   (`{inputs.ref}`, `{inputs.script}:run`, `{inputs.dir}/x.png`), is the
+///   caller's, and so is anything led by a `file` input
+///   (`{inputs.stem}.png`). A `file` input arrives written from the project
+///   root and stays so. A `string` one keeps the caller's spelling in an image or a
+///   panel, and is read from the file's folder in `python:` and
+///   `working_directory`, as it always was.
+fn anchor_path(
+    field: PathField,
+    raw: &str,
+    inputs: &BTreeMap<String, serde_json::Value>,
+    at: &Anchoring<'_>,
+    unknown: &mut Vec<String>,
+) -> Option<Anchored> {
+    let filled = match whole_marker(raw.trim()) {
+        Some(name) => match inputs.get(name) {
+            Some(serde_json::Value::String(s)) => s.clone(),
+            _ => return None,
+        },
+        None if raw.contains("{inputs.") => interpolate_markers(raw, inputs, unknown),
+        None => raw.to_string(),
+    };
+    let leading = match field {
+        PathField::Python => split_python_spec(raw.trim()).0,
+        _ => raw.trim().to_string(),
+    };
+    // A value led by a `file` input arrived written from the project root,
+    // whatever follows it (`{inputs.stem}.png`, `{inputs.dir}/a.py:run`).
+    let from_file_input = leading_input(&leading).is_some_and(|name| at.file_inputs.contains(name));
+    let from_input = passed_input(&leading);
+    if from_file_input || (from_input.is_some() && field == PathField::File) {
+        return Some(Anchored {
+            value: filled,
+            python_rewritten: false,
+        });
+    }
+    let value = match field {
+        PathField::Python => {
+            let spec = PythonSpec::new(filled.clone());
+            let rebased =
+                package_init(&spec, rebase_python_spec(&spec, at.rel_dir), at.python_root);
+            // A dotted spec names an installed module when nothing in the
+            // sequence file's folder could be it: no file for the module
+            // and no folder or module for its first segment. It then stays
+            // as written, so the worker's import fallback applies as it
+            // does for a phase of the procedure. A missing file under a
+            // folder that exists is a typo, and keeps the rebased path the
+            // ref check reports as "file not found".
+            if names_installed_module(&spec, &rebased, at.file_dir, at.python_root) {
+                filled.clone()
+            } else {
+                rebased.as_str().to_string()
+            }
+        }
+        PathField::WorkingDirectory => {
+            if at.rel_dir.is_empty() || Path::new(&filled).is_absolute() {
+                filled.clone()
+            } else {
+                format!("{}/{filled}", at.rel_dir)
+            }
+        }
+        PathField::File => rebase_file_ref(&filled, at.rel_dir).unwrap_or_else(|| filled.clone()),
+    };
+    Some(Anchored {
+        python_rewritten: field == PathField::Python && from_input.is_none() && value != filled,
+        value,
+    })
 }
 
 /// The list and index of a path's entry: `main[1].retry.limit` is entry 1

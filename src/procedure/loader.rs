@@ -3084,6 +3084,8 @@ main:
               label: A
 "#,
         );
+        // The option image the fixture names: a missing file is a finding of its own.
+        std::fs::write(dir.join("a.png"), b"").unwrap();
         let problems = def.resolve_runtime_refs(&dir, None);
         assert!(problems.is_empty(), "unexpected: {problems:?}");
         std::fs::remove_dir_all(&dir).ok();

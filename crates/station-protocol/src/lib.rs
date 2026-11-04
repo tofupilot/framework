@@ -1564,6 +1564,13 @@ pub enum StudioRequest {
     /// this covers the one thing it cannot express: an empty directory,
     /// made before there is a file to put in it.
     CreateDir { path: String },
+    /// The project root a procedure created in `dir` would resolve its
+    /// references from: the folder of the nearest `pyproject.toml` at or
+    /// above `dir`, by the same walk as a run. `dir` is root-relative,
+    /// `""` for the opened root, and need not exist yet. The page asks
+    /// here rather than walking `ReadFile` probes itself, so the rule
+    /// lives in one place. Answers `ProjectRoot`.
+    ProjectRootOf { dir: String },
     /// Validate the project's procedure definition. `path: None`
     /// validates the root's default procedure file.
     Validate {
@@ -1818,8 +1825,16 @@ pub struct StudioProcedure {
     /// procedure and what `OpenProcedure` takes.
     pub path: String,
     /// Root-relative directory holding it, `""` for the project root.
-    /// This is the directory a run executes.
+    /// Identity of the procedure (its `tofupilot.json` link lives here).
     pub dir: String,
+    /// Root-relative directory its `python:` references resolve from and
+    /// its run executes in, `""` for the project root: the folder of the
+    /// nearest `pyproject.toml` above the file (the package dir a
+    /// deployment gets), else `dir`. Absent from daemons older than this
+    /// field, and when that folder lies above the opened root, where no
+    /// root-relative path names it: read `dir` then.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package_dir: Option<String>,
     /// Display name: the definition's own `name:` when it reads, else
     /// the holding directory's name. Never a file name — the file name
     /// is canonical, the folder is what the author chose.
@@ -1935,6 +1950,13 @@ pub enum StudioResponse {
     DirCreated {
         /// Root-relative path of the directory that now exists.
         path: String,
+    },
+    /// `ProjectRootOf`: the project root, root-relative (`""` for the
+    /// opened root). Absent when no `pyproject.toml` is found under the
+    /// opened root: the run then resolves from the procedure's own folder.
+    ProjectRoot {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        dir: Option<String>,
     },
     Deleted {
         /// Root-relative path that is gone from the project.
@@ -2246,7 +2268,7 @@ pub struct StudioSequenceCall {
 #[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct StudioSequenceInput {
     pub name: String,
-    /// `string`, `number`, `integer` or `boolean`.
+    /// `string`, `number`, `integer`, `boolean` or `file`.
     pub input_type: String,
     /// The value the call gives in `with:`, as JSON text; absent when the
     /// call relies on the default.

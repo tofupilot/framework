@@ -450,6 +450,167 @@ fn sequence_parent_hint(
     String::new()
 }
 
+/// What a resolved phase or plug file says about the deployment: under
+/// `~`, the home of the account running the station, outside the tree a
+/// build ships, or named by an absolute path of this machine. Warnings:
+/// the file loads here, the station may not find it.
+fn shipping_problems(
+    kind: &str,
+    key: &str,
+    spec: &PythonSpec,
+    file: &Path,
+    procedure_dir: &Path,
+    at: RefLocation,
+) -> Vec<RefProblem> {
+    let (path_part, callable) = super::expand::split_python_spec(spec.as_str().trim());
+    if path_part.starts_with('~') {
+        return vec![RefProblem {
+            code: codes::PYTHON_HOME_PATH,
+            severity: RefSeverity::Warning,
+            message: format!(
+                "{kind} `{key}`: `~` is the home of the account running the station, which differs between a service and a session, and the file is not shipped with the deployment; deliver it in a Python package"
+            ),
+            location: at,
+            hint: None,
+        }];
+    }
+    let root = deployable_root(procedure_dir);
+    let canonical_root = root.canonicalize().unwrap_or_else(|_| root.clone());
+    let canonical = file.canonicalize().unwrap_or_else(|_| file.to_path_buf());
+    // The file's spelling from the root with `/`, with `..` when it sits
+    // in another folder of the workspace or outside it, where
+    // `relative_to` would print it absolute.
+    let spelled = match (canonical.parent(), canonical.file_name()) {
+        (Some(parent), Some(name)) => {
+            let dir = super::expand::relative_dir(procedure_dir, parent);
+            let name = name.to_string_lossy();
+            if dir.is_empty() {
+                name.to_string()
+            } else {
+                format!("{dir}/{name}")
+            }
+        }
+        _ => relative_to(file, procedure_dir),
+    };
+    if canonical.starts_with(&canonical_root) {
+        // Shipped, but an absolute path names this machine's folders: the
+        // station unpacks the deployment elsewhere and finds nothing there.
+        if super::expand::is_machine_path(&path_part) {
+            let callable = callable.map(|c| format!(":{c}")).unwrap_or_default();
+            return vec![RefProblem {
+                code: codes::PYTHON_OUTSIDE_ROOT,
+                severity: RefSeverity::Warning,
+                message: format!(
+                    "{kind} `{key}`: `{path_part}` is an absolute path of this machine, which the station does not have once the deployment is unpacked elsewhere; write it from the project root: `{spelled}{callable}`"
+                ),
+                location: at,
+                hint: None,
+            }];
+        }
+        return Vec::new();
+    }
+    let where_ = if root == procedure_dir {
+        "the project root".to_string()
+    } else {
+        format!("the uv workspace at {}", root.display())
+    };
+    vec![RefProblem {
+        code: codes::PYTHON_OUTSIDE_ROOT,
+        severity: RefSeverity::Warning,
+        message: format!(
+            "{kind} `{key}`: {spelled} is outside {where_}, so it will not be shipped with the deployment; move it under that directory or deliver it in a Python package"
+        ),
+        location: at,
+        hint: None,
+    }]
+}
+
+/// What the lint says about a phase a sequence file brought in, from the
+/// `python:` as that file wrote it: a reference a package's sequence
+/// writes relative to itself, and a dotted name whose sibling file shadows
+/// a module of the project. Nothing when the spec was kept as written (an
+/// import) or names a file by path.
+fn sequence_reference_problems(
+    def: &ProcedureDefinition,
+    phase: &PhaseDefinition,
+    procedure_dir: &Path,
+    at: RefLocation,
+) -> Vec<RefProblem> {
+    // Only a `python:` the expansion rewrote from the sequence file's
+    // folder is judged, and the expansion says which: a module left to the
+    // import fallback and a path the caller passed through an input are
+    // not (`PhaseSource::python_as_written`).
+    let Some(spec) = &phase.python else {
+        return Vec::new();
+    };
+    let Some(written) = phase
+        .source
+        .as_ref()
+        .and_then(|s| s.python_as_written.as_deref())
+    else {
+        return Vec::new();
+    };
+    let (rebased, _) = super::expand::split_python_spec(spec.as_str().trim());
+    let Some(sequence_dir) = phase
+        .source
+        .as_ref()
+        .and_then(|s| Path::new(&s.file).parent())
+    else {
+        return Vec::new();
+    };
+    let rel_dir = super::expand::relative_dir(procedure_dir, sequence_dir);
+    // The module beside the sequence, read off the rewritten spec rather
+    // than the written one: a `python:` built from an input
+    // (`phases.{inputs.v}`) has its value only there.
+    let Some(beside) = rebased
+        .strip_prefix(&format!("{rel_dir}/"))
+        .and_then(|p| p.strip_suffix(".py"))
+    else {
+        return Vec::new();
+    };
+    let from_package = def.sequences.iter().any(|s| {
+        phase.sequence_path.starts_with(&s.path)
+            && super::expand::split_package_reference(&s.source).is_some()
+    });
+    if from_package {
+        return vec![RefProblem {
+            code: codes::PACKAGE_SEQUENCE_RELATIVE_REFERENCE,
+            severity: RefSeverity::Warning,
+            message: format!(
+                "Phase `{}`: `{written}` is relative to the sequence file inside its package, so the file loads by path, outside the package, and its relative imports fail; write the module name (`<package>.phases.<module>:<callable>`)",
+                phase.key
+            ),
+            location: at,
+            hint: None,
+        }];
+    }
+    // A path written in path form names one file, nothing to shadow.
+    let module = written.split(':').next().unwrap_or(written).trim();
+    if module.contains(['/', '\\']) || module.starts_with('.') {
+        return Vec::new();
+    }
+    let shadowed = [
+        procedure_dir.join(format!("{beside}.py")),
+        procedure_dir.join(beside).join("__init__.py"),
+    ]
+    .into_iter()
+    .find(|p| p.is_file());
+    let Some(shadowed) = shadowed else {
+        return Vec::new();
+    };
+    vec![RefProblem {
+        code: codes::SEQUENCE_MODULE_SHADOWED,
+        severity: RefSeverity::Warning,
+        message: format!(
+            "Phase `{}`: `{written}` names {rebased} beside the sequence; the project's {} of the same name is not the one that runs. Rename one of them if the project's file is the one you meant",
+            phase.key,
+            relative_to(&shadowed, procedure_dir)
+        ),
+        location: at,
+        hint: None,
+    }]
+}
+
 /// `(module, name)` for each top-level `from` import of `source` (file
 /// `file`) naming what a module of the procedure does not define. A
 /// module outside the procedure (stdlib, installed), one with a
@@ -2781,7 +2942,8 @@ impl PythonSpec {
             // File path syntax: resolve relative to project_dir, allow ..
             let expanded_path = if let Some(rest) = path_part.strip_prefix('~') {
                 if let Some(home) = dirs::home_dir() {
-                    home.join(rest.trim_start_matches('/'))
+                    // Either separator: `~\phases\x.py` on Windows.
+                    home.join(rest.trim_start_matches(['/', '\\']))
                 } else {
                     return Err("cannot expand `~`: no home directory".into());
                 }
@@ -2917,23 +3079,42 @@ impl PythonSpec {
         .then(|| (self.get_module(), callable))
     }
 
-    /// Get the callable name (for display purposes, doesn't validate)
+    /// The function or class the run calls: the one written, else the one
+    /// `resolve_path` checks (read off the text, no disk access).
     pub fn get_callable_name(&self) -> String {
-        let spec = self.0.trim();
-        if let Some(name) = spec.split(':').nth(1) {
-            name.trim().to_string()
-        } else {
-            spec.rsplit(&['.', '/'][..])
-                .next()
-                .unwrap_or(spec)
-                .to_string()
+        let (path_part, callable) = super::expand::split_python_spec(self.0.trim());
+        if let Some(name) = callable {
+            return name;
         }
+        // The name `resolve_path` gives, so the run calls what `validate`
+        // checked: a path's file stem (`x` for `phases/x.py`, not the `py`
+        // after its last dot), a package's folder for its `__init__.py`, a
+        // dotted name's last segment.
+        if path_part.contains(['/', '\\']) {
+            let path = Path::new(&path_part);
+            let named = if path.file_name().is_some_and(|n| n == "__init__.py") {
+                path.parent().unwrap_or(path)
+            } else {
+                path
+            };
+            return named
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or(&path_part)
+                .to_string();
+        }
+        path_part
+            .rsplit('.')
+            .next()
+            .unwrap_or(&path_part)
+            .to_string()
     }
 
-    /// Get the module path (for backward compat with execution code)
+    /// The file or module the run loads: the spec without its function,
+    /// split as `resolve_path` splits it, a Windows drive kept with its
+    /// path (`C:/lib/check.py:run` loads `C:/lib/check.py`).
     pub fn get_module(&self) -> String {
-        let spec = self.0.trim();
-        spec.split(':').next().unwrap_or(spec).to_string()
+        super::expand::split_python_spec(self.0.trim()).0
     }
 }
 
@@ -2961,7 +3142,7 @@ pub struct ExecutableConfig {
     #[validate(length(max = 500))]
     pub shell: Option<String>,
 
-    /// Working directory of the command, relative to the procedure directory.
+    /// Working directory of the command, from the project root.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[validate(length(max = 4096))]
     pub working_directory: Option<String>,
@@ -2987,8 +3168,8 @@ pub struct PhaseDefinitionYaml {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scope: Option<Scope>,
     /// "file:function" reference to the phase function, e.g. phases.main:check ->
-    /// def check() in phases/main.py, resolved relative to the directory holding
-    /// this procedure.yaml. A phase takes python OR executable, never both.
+    /// def check() in phases/main.py, from the project root (the pyproject.toml's
+    /// folder, else this file's). A phase takes python OR executable, never both.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub python: Option<PythonSpec>,
     /// Runs a shell command instead of Python. A phase with neither python nor
@@ -3083,10 +3264,10 @@ pub struct SequenceCallYaml {
     /// the same file twice with two keys.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key: Option<String>,
-    /// The sequence file: a path relative to the file holding this entry
-    /// (`./sequences/calibrate.yaml`, `../shared/bench.yaml`), or
-    /// `<package>:<path inside the package>` for a file shipped in a Python
-    /// package of the procedure's environment. Never absolute, never `~`.
+    /// The sequence file, from the project root (`sequences/calibrate.yaml`,
+    /// `../shared/bench.yaml`), from the holding file inside a sequence file,
+    /// or `<package>:<path inside the package>` for a file shipped in a Python
+    /// package. Never absolute, never `~`.
     #[serde(deserialize_with = "trimmed_text")]
     pub uses: String,
     /// Values for the sequence's `inputs:`, by input name. Every input without
@@ -3673,7 +3854,7 @@ impl ProcedureDefinition {
             });
             if !from_package && !canonical.starts_with(&canonical_root) {
                 let where_ = if root == procedure_dir {
-                    "the procedure directory".to_string()
+                    "the project root".to_string()
                 } else {
                     format!("the uv workspace at {}", root.display())
                 };
@@ -4011,6 +4192,17 @@ impl ProcedureDefinition {
                     }
                     Ok(resolved) => resolved,
                 };
+                // A file of the project, not an installed module's.
+                if plug.python.parse(procedure_dir).is_ok() {
+                    problems.extend(shipping_problems(
+                        "Plug",
+                        &plug.key,
+                        &plug.python,
+                        &file,
+                        procedure_dir,
+                        at("python"),
+                    ));
+                }
                 // Unreadable (permissions, binary): cannot tell, say nothing.
                 let Ok(source) = std::fs::read_to_string(&file) else {
                     continue;
@@ -4426,6 +4618,65 @@ impl ProcedureDefinition {
                         at("ui.panel"),
                     ));
                 }
+                // A relative image that names no file shows the operator
+                // the placeholder, silently. URLs and data URIs are the
+                // browser's to load, and a run-time `ui.<key> = ...` may
+                // replace the value: a warning. So does a file outside the
+                // project root (a sequence shared across a uv workspace
+                // keeps its images beside itself): the operator UI's
+                // `/files/*` route serves the root only, and a `..` in the
+                // request is dropped, so the file loads here and shows the
+                // placeholder in the run.
+                let canonical_dir = procedure_dir
+                    .canonicalize()
+                    .unwrap_or_else(|_| procedure_dir.to_path_buf());
+                for c in phase.ui.iter().flat_map(|u| u.components.iter().flatten()) {
+                    let value = match (&c.component_type, &c.default_value) {
+                        (UIComponentType::Image, Some(ComponentValue::String(src))) => Some(src),
+                        _ => None,
+                    };
+                    let options = c.options.iter().flatten().filter_map(|o| o.image.as_ref());
+                    for src in value.into_iter().chain(options) {
+                        let Some(rel) = super::expand::relative_file_ref(src) else {
+                            continue;
+                        };
+                        let file = procedure_dir.join(rel);
+                        if !file.is_file() {
+                            problems.push(RefProblem {
+                                code: codes::IMAGE_FILE_NOT_FOUND,
+                                severity: RefSeverity::Warning,
+                                message: format!(
+                                    "Phase `{}`: image file not found: {rel} (component `{}`)",
+                                    phase.key, c.key
+                                ),
+                                location: at("ui"),
+                                hint: None,
+                            });
+                        } else if !file
+                            .canonicalize()
+                            .is_ok_and(|f| f.starts_with(&canonical_dir))
+                        {
+                            // A procedure's own phase has no caller to take
+                            // the path from: the input advice is for a phase
+                            // a sequence file wrote.
+                            let way_out = if phase.source.is_some() {
+                                "move the image under the root, or let the calling procedure pass its path through a `file` input"
+                            } else {
+                                "move the image under the root"
+                            };
+                            problems.push(RefProblem {
+                                code: codes::IMAGE_OUTSIDE_ROOT,
+                                severity: RefSeverity::Warning,
+                                message: format!(
+                                    "Phase `{}`: image {rel} is outside the project root, the only folder the operator UI serves, so the operator UI shows the placeholder (component `{}`); {way_out}",
+                                    phase.key, c.key
+                                ),
+                                location: at("ui"),
+                                hint: None,
+                            });
+                        }
+                    }
+                }
                 // One finding per component, naming every idle field: five
                 // pasted styling lines are one mistake, not five.
                 for c in phase.ui.iter().flat_map(|u| u.components.iter().flatten()) {
@@ -4575,6 +4826,37 @@ impl ProcedureDefinition {
                                 });
                             }
                         } else if let Ok(written) = std::fs::read_to_string(&file) {
+                            // A phase of a sequence file that is itself
+                            // outside the shipped tree: that file is the
+                            // finding (`sequence_outside_root`), not each
+                            // of its phases.
+                            let sequence_outside = self
+                                .sequences
+                                .iter()
+                                .find(|s| s.path == phase.sequence_path)
+                                .is_some_and(|s| {
+                                    let root = deployable_root(procedure_dir);
+                                    let root = root.canonicalize().unwrap_or(root);
+                                    Path::new(&s.file)
+                                        .canonicalize()
+                                        .is_ok_and(|f| !f.starts_with(&root))
+                                });
+                            if !sequence_outside {
+                                problems.extend(shipping_problems(
+                                    "Phase",
+                                    &phase.key,
+                                    spec,
+                                    &file,
+                                    procedure_dir,
+                                    at("python"),
+                                ));
+                            }
+                            problems.extend(sequence_reference_problems(
+                                self,
+                                phase,
+                                procedure_dir,
+                                at("python"),
+                            ));
                             // Where the function is defined: a package
                             // `__init__` re-exporting it, or an alias.
                             let (_, source, callable) =
@@ -6345,6 +6627,62 @@ pub struct SelectOption {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The run loads the file `get_module` names and calls the function
+    // `get_callable_name` names, `validate` checks the ones `resolve_path`
+    // names: the two agree, a path without a function included (it used to
+    // call `py`, after the extension's dot) and a Windows drive path (its
+    // module used to be `C`).
+    #[test]
+    fn the_run_calls_the_function_validate_checked() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("phases/pkg")).unwrap();
+        std::fs::write(dir.path().join("phases/pkg/__init__.py"), "").unwrap();
+        for (spec, module, expected) in [
+            ("phases.check", "phases.check", "check"),
+            ("phases/check.py", "phases/check.py", "check"),
+            ("phases/check", "phases/check", "check"),
+            ("phases/check.py:run", "phases/check.py", "run"),
+            ("phases.check:run", "phases.check", "run"),
+            ("phases.pkg", "phases.pkg", "pkg"),
+            ("phases/pkg/__init__.py", "phases/pkg/__init__.py", "pkg"),
+            ("C:/lib/check.py:run", "C:/lib/check.py", "run"),
+        ] {
+            let spec = PythonSpec(spec.into());
+            let (_, checked) = spec
+                .resolve_path(dir.path())
+                .unwrap_or_else(|e| panic!("{}: {e}", spec.as_str()));
+            assert_eq!(spec.get_module(), module, "{}", spec.as_str());
+            assert_eq!(spec.get_callable_name(), expected, "{}", spec.as_str());
+            assert_eq!(checked, expected, "{}", spec.as_str());
+        }
+        // `\` separates folders on Windows only: whatever the platform
+        // reads, the run and the check read the same.
+        let spec = PythonSpec("phases\\check.py".into());
+        let (_, checked) = spec.resolve_path(dir.path()).unwrap();
+        assert_eq!(spec.get_callable_name(), checked);
+    }
+
+    // `~` takes either separator after it: `~\phases\x.py` on Windows
+    // used to lose the `~` and read as `\phases\x.py`.
+    #[test]
+    fn a_home_path_expands_with_either_separator() {
+        let home = dirs::home_dir().expect("a home directory");
+        let dir = std::env::temp_dir();
+        for spec in ["~/tp-nowhere/x.py:fn", "~\\tp-nowhere\\x.py:fn"] {
+            let (file, callable) = PythonSpec(spec.into()).resolve_path(&dir).expect(spec);
+            assert_eq!(callable, "fn");
+            // Under the home, and the rest joined without a leading
+            // separator: with one kept, `home.join` on Windows roots the
+            // path at the drive instead.
+            let rest = file
+                .strip_prefix(&home)
+                .unwrap_or_else(|_| panic!("{spec}: {}", file.display()));
+            let rest = rest.to_string_lossy();
+            assert!(!rest.starts_with(['/', '\\']), "{spec}: {rest}");
+            assert!(rest.ends_with("x.py"), "{spec}: {rest}");
+        }
+    }
 
     // ========================================================================
     // Scope spellings: slot/execution/station only

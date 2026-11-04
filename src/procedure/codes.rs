@@ -71,6 +71,23 @@ pub const PLUG_MISSING_PARAM: &str = "plug_missing_param";
 pub const PLUG_UNKNOWN_PARAM: &str = "plug_unknown_param";
 pub const SEQUENCE_OUTSIDE_ROOT: &str = "sequence_outside_root";
 pub const SEQUENCE_PLUG_CLASS_MISMATCH: &str = "sequence_plug_class_mismatch";
+/// A phase or plug file outside the tree a deployment ships.
+pub const PYTHON_OUTSIDE_ROOT: &str = "python_outside_root";
+/// A phase or plug file under `~`: the home of the account running the
+/// station, not shipped with the deployment.
+pub const PYTHON_HOME_PATH: &str = "python_home_path";
+/// A dotted `python:` in a sequence file whose sibling file shadows a
+/// module of the project.
+pub const SEQUENCE_MODULE_SHADOWED: &str = "sequence_module_shadowed";
+/// A `python:` written relative to a sequence file that a package
+/// delivers: the file loads by path, outside its package.
+pub const PACKAGE_SEQUENCE_RELATIVE_REFERENCE: &str = "package_sequence_relative_reference";
+/// A component image written as a relative path that names no file: the
+/// operator gets the placeholder.
+pub const IMAGE_FILE_NOT_FOUND: &str = "image_file_not_found";
+/// A component image outside the project root: the operator UI serves
+/// files under that root only, so the run shows the placeholder.
+pub const IMAGE_OUTSIDE_ROOT: &str = "image_outside_root";
 pub const EXECUTABLE_COMMAND_EMPTY: &str = "executable_command_empty";
 
 // Measurements and the operator UI.

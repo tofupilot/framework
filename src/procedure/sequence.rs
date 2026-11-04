@@ -94,6 +94,11 @@ pub enum InputType {
     Number,
     Integer,
     Boolean,
+    /// A path to a file or a folder under the project root. Whoever sets
+    /// it writes it from their own folder, like any other path in their
+    /// file, and the sequence receives it written from the project root,
+    /// in every field that takes a path.
+    File,
 }
 
 impl InputType {
@@ -103,6 +108,7 @@ impl InputType {
             InputType::Number => "number",
             InputType::Integer => "integer",
             InputType::Boolean => "boolean",
+            InputType::File => "file",
         }
     }
 
@@ -116,6 +122,7 @@ impl InputType {
                 value.is_i64() || value.is_u64() || value.as_f64().is_some_and(|f| f.fract() == 0.0)
             }
             InputType::Boolean => value.is_boolean(),
+            InputType::File => value.is_string(),
         }
     }
 }
@@ -126,7 +133,11 @@ impl InputType {
 #[serde(rename_all = "snake_case")]
 #[serde(deny_unknown_fields)]
 pub struct InputSpecYaml {
-    /// string, number, integer or boolean.
+    /// string, number, integer, boolean or file. A `file` input is a path
+    /// under the project root (a component image, a panel, a `python:`, a
+    /// `working_directory`): the call writes it from its own folder, a
+    /// default from this file's folder, and the phases receive it from the
+    /// project root.
     #[serde(rename = "type")]
     pub input_type: InputType,
     /// Value used when the call gives none. Without it the call must set the
@@ -189,6 +200,13 @@ pub struct PhaseSource {
     pub list: PhaseStage,
     /// The entry's index in that list.
     pub index: usize,
+    /// The entry's `python:` as the file writes it, when the expansion
+    /// rewrote it from the sequence file's folder: what the sequence lints
+    /// judge. `None` for a module left to the import fallback and for a
+    /// path the caller passed through an input. Only the expansion that
+    /// just ran knows it, so it never travels.
+    #[serde(skip)]
+    pub python_as_written: Option<String>,
 }
 
 /// One resolved sequence call of the expanded procedure. The flat phase
