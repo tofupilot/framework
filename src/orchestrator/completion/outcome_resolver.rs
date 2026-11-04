@@ -68,8 +68,13 @@ pub fn format_error_message(
     job_result: &JobResult,
 ) -> Option<String> {
     if is_retry_limit_exceeded {
+        let why = job_result
+            .message
+            .as_deref()
+            .map(|m| format!(": {m}"))
+            .unwrap_or_default();
         Some(format!(
-            "Phase exceeded retry limit ({} retries)",
+            "Phase exceeded retry limit ({} retries){why}",
             retry_limit
         ))
     } else if let Some(ref e) = job_result.error {
@@ -84,7 +89,7 @@ pub fn format_error_message(
             (None, None) if job_result.phase_outcome == crate::job::Outcome::Timeout => {
                 Some("Timed out".to_string())
             }
-            (None, None) => None,
+            (None, None) => job_result.message.clone(),
         }
     }
 }

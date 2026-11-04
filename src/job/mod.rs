@@ -294,7 +294,12 @@ pub struct JobResult {
     /// message and its duration.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout_ms: Option<u64>,
-    pub error: Option<String>,  // Set if execution error occurred
+    pub error: Option<String>, // Set if execution error occurred
+    /// The message the phase ended with (`phase.fail("...")`, `skip`,
+    /// `stop`, `retry`). Shown where an error would be, but never read
+    /// by the outcome: a FAIL with a message stays FAIL.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
     pub exit_code: Option<i32>, // Exit code from sys.exit() if called
     pub measurements: Vec<crate::measurements::Measurement>,
     pub logs: Vec<LogEntry>,
@@ -391,6 +396,7 @@ impl JobResult {
             timeout_secs: None,
             timeout_ms: None,
             error: Some(error_msg),
+            message: None,
             exit_code: None,
             measurements: vec![],
             logs: vec![],
@@ -424,6 +430,7 @@ impl JobResult {
             timeout_secs: None,
             timeout_ms: None,
             error: None,
+            message: None,
             exit_code: None,
             measurements: vec![],
             logs: vec![LogEntry {
@@ -462,6 +469,7 @@ impl JobResult {
             timeout_secs: Some(((ms as f64) / 1000.0).round().max(1.0) as u64),
             timeout_ms: Some(ms),
             error: None,
+            message: None,
             exit_code: None,
             measurements: vec![],
             logs: vec![],
@@ -487,6 +495,7 @@ impl JobResult {
             timeout_secs: None,
             timeout_ms: None,
             error: None,
+            message: None,
             exit_code: None,
             measurements: vec![],
             logs: vec![],

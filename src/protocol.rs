@@ -177,6 +177,10 @@ pub struct JobResult {
     #[serde(default)]
     pub logs: Vec<LogEntry>,
     pub error: Option<String>,
+    /// The message the phase ended with (`phase.fail("...")`, `skip`,
+    /// `stop`, `retry`). Unlike `error`, it leaves the outcome alone.
+    #[serde(default)]
+    pub message: Option<String>,
     pub exit_code: Option<i32>,
     pub unit_json: Option<String>,
     /// Run-level metadata set via `run.metadata[...]`, double-encoded JSON

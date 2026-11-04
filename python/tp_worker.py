@@ -3503,6 +3503,9 @@ def execute_job_streaming(
             result_dict = {
                 "success": True,
                 "phase_result": phase_result,
+                # The `phase.fail()` / `skip()` / `stop()` / `retry()`
+                # message. Not `error`: an error makes the phase ERROR.
+                "phase_message": None if error_message is None else str(error_message),
                 "measurements": measurements.to_list(),
                 "logs": logs.entries,
                 "unit": unit_info,
@@ -3904,7 +3907,8 @@ def handle_connection(conn: socket.socket, procedure_dir: Path):
                         _log_to_ndjson(log)
                         for log in final_result.get("logs", [])
                     ],
-                    "error": final_result.get("error_message") or final_result.get("error"),
+                    "error": final_result.get("error"),
+                    "message": final_result.get("phase_message"),
                     "exit_code": final_result.get("exit_code"),
                 }
 

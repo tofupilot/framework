@@ -301,6 +301,7 @@ mod aggregate_outcome_tests {
             timeout_secs: None,
             timeout_ms: None,
             error: None,
+            message: None,
             exit_code: None,
             measurements: vec![],
             logs: vec![],
