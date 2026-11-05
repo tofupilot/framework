@@ -57,6 +57,15 @@ pub enum StationEvent {
         /// value as unknown.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         run_mode: Option<String>,
+        /// The browser the kiosk UI opens in, where the CLI can tell
+        /// without opening it, on Linux: `"chromium"` (Chromium or Google
+        /// Chrome on the reporting process's `PATH`), or `"missing"` on a machine
+        /// with a desktop to open it on. Omitted on headless Linux, on
+        /// Windows and macOS, and by older CLIs; consumers treat a missing
+        /// value as unknown. Lets the dashboard say why a station shows a
+        /// browser tab instead of the kiosk.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        kiosk_browser: Option<String>,
     },
     /// System telemetry, published periodically
     Telemetry {
@@ -3777,6 +3786,7 @@ mod tests {
             mac_address: None,
             cli_version: "v".into(),
             run_mode: None,
+            kiosk_browser: None,
         };
         assert_eq!(ev.execution_id(), None);
     }
