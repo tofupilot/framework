@@ -744,6 +744,51 @@ pub fn ui_set_keys(content: &str, function: &str) -> Option<Vec<String>> {
     Some(keys)
 }
 
+/// Whether a phase hands its `ui` object somewhere a text scan cannot
+/// follow: `setattr(ui, f"c{i}", v)`, `helper(ui)`, `{"ui": ui}`, `u = ui`,
+/// `ui.__setattr__(...)`. Then a `ui.<key>` the file never spells out is no
+/// evidence that the key is never written. The worker injects `ui` through
+/// the phase's parameter, so only `function`'s body counts; a callable that
+/// is not a top-level def of this file falls back to the whole file.
+pub fn hands_off_ui(content: &str, function: &str) -> bool {
+    static UI_WORD: OnceLock<Regex> = OnceLock::new();
+    let ui_word = re(&UI_WORD, r"\bui\b");
+    let handed = |text: &str| {
+        let text = blank_strings(text);
+        ui_word.find_iter(&text).any(|m| {
+            let after = text[m.end()..].trim_start();
+            if text[..m.start()].ends_with('.') {
+                return false;
+            }
+            if let Some(attr) = after.strip_prefix('.') {
+                return attr.trim_start().starts_with("__setattr__");
+            }
+            // `ui = ...` rebinds it, `f(ui=1)` only names a parameter.
+            !after.starts_with('=') || after.starts_with("==")
+        })
+    };
+
+    // A `def`'s `ui` is that function's parameter: only its body counts.
+    let line_hands_off = |l: &LogicalLine| {
+        if def_line().is_match(&l.text) {
+            one_line_body(&l.text).is_some_and(|body| handed(&body))
+        } else {
+            handed(&l.text)
+        }
+    };
+    let lines = logical_lines(content);
+    let start = lines.iter().position(|l| {
+        l.indent == 0
+            && def_line()
+                .captures(&l.text)
+                .is_some_and(|c| &c[1] == function)
+    });
+    match start {
+        Some(start) => function_body(&lines, start).iter().any(line_hands_off),
+        None => lines.iter().any(line_hands_off),
+    }
+}
+
 /// Whether an assignment statement binds `name`: `Name = ...`,
 /// `Name: T = ...`, and the tuple form `Other, Name = ...`.
 fn binds_assignment(text: &str, name: &str) -> bool {
@@ -2344,6 +2389,48 @@ class Cfg:
             recorded_measurement_names(src, "measure"),
             Some(vec!["voltage".to_string(), "motor".to_string()])
         );
+    }
+
+    #[test]
+    fn hands_off_ui_sees_what_a_text_scan_cannot_follow() {
+        for body in [
+            "setattr(ui, f\"c{i}\", 1)",
+            "setattr(\n        ui, name, 1)",
+            "show(ui, 'r', 1)",
+            "show('r', ui)",
+            "helper(ui=ui)",
+            "u = ui",
+            "ctx = {'ui': ui}",
+            "x = [a, ui]",
+            "x = ui; y = 1",
+            "ui.__setattr__('c1', 1)",
+        ] {
+            let src = format!("def phase(ui):\n    {body}\n");
+            assert!(hands_off_ui(&src, "phase"), "{body}");
+        }
+        assert!(hands_off_ui("def phase(ui): helper(ui)\n", "phase"));
+        assert!(hands_off_ui(
+            "def phase(ui):\n    def inner(u=ui):\n        pass\n    def fill():\n        helper(ui)\n",
+            "phase"
+        ));
+        for src in [
+            "def phase(ui):\n    ui.amps = 1\n",
+            "def phase(log, ui, measurements):\n    pass\n",
+            "async def phase(\n    ui,\n    log,\n):\n    pass\n",
+            "def phase(ui):\n    build_ui(1)\n    self.ui.x = 1\n    x = gui\n",
+            "def phase(ui):\n    setattr(device, 'x', 1)  # setattr(ui, 'x', 1)\n",
+            "def phase(ui):\n    \"\"\"Writes (ui) when ready.\"\"\"\n",
+            "def phase(ui):\n    log.info(\"phase, ui, measurements\")\n",
+            "def phase(ui):\n    other(ui=1)\n",
+            "def other(ui):\n    helper(ui)\n\ndef phase(ui):\n    ui.amps = 1\n",
+            "def phase(ui):\n    def fmt(ui, v):\n        return v\n    ui.amps = 1\n",
+        ] {
+            assert!(!hands_off_ui(src, "phase"), "{src}");
+        }
+        // Not a top-level def here: the whole file is all there is to read.
+        let src = "class P:\n    def phase(self, ui):\n        helper(ui)\n";
+        assert!(hands_off_ui(src, "P.phase"));
+        assert!(!hands_off_ui("def other(ui):\n    ui.a = 1\n", "missing"));
     }
 
     #[test]

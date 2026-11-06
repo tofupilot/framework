@@ -43,7 +43,8 @@ pub struct Names<'a> {
     pub plugs: Vec<&'a str>,
     /// The phase's Python source, when the station can read it: a
     /// `ui.<key>` no component declares is a value the phase writes
-    /// (`ui.<key> = v`), and the source says whether it ever does.
+    /// (`ui.<key> = v`), and the source says whether it ever does. `None`
+    /// too when the phase writes out of sight (`pysource::hands_off_ui`).
     pub source: Option<String>,
 }
 

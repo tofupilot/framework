@@ -4609,7 +4609,11 @@ impl ProcedureDefinition {
                             .python
                             .as_ref()
                             .and_then(|p| p.resolve_path(procedure_dir).ok())
-                            .and_then(|(file, _)| std::fs::read_to_string(file).ok()),
+                            .and_then(|(file, callable)| {
+                                let source = std::fs::read_to_string(file).ok()?;
+                                (!super::pysource::hands_off_ui(&source, &callable))
+                                    .then_some(source)
+                            }),
                     );
                     problems.extend(panel_problems(
                         rel,

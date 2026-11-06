@@ -2180,6 +2180,13 @@ main:
             problems[0]
         );
 
+        // Written out of sight: the source is no evidence either way.
+        let phase = dir.join("phases/main.py");
+        let source = std::fs::read_to_string(&phase).unwrap();
+        std::fs::write(&phase, "def check(ui):\n    setattr(ui, f\"sp{1}ed\", 1)\n").unwrap();
+        assert!(def.resolve_runtime_refs(&dir, None).is_empty());
+        std::fs::write(&phase, source).unwrap();
+
         let html = "<input type=\"checkbox\" name=\"armed\"><b data-bind=\"ui.speed\"></b><button name=\"tare\">Tare</button>";
         std::fs::write(dir.join("panels/p1.html"), html).unwrap();
         assert!(def.resolve_runtime_refs(&dir, None).is_empty());
