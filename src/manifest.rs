@@ -1,15 +1,18 @@
 //! Typed deployment manifest. Schema produced by
-//! `apps/web/server/git/clone-context.ts` and consumed by the CLI's pull /
+//! `apps/web/server/git/build-command.ts` and consumed by the CLI's pull /
 //! install / run paths. Replaces the prior ad-hoc
 //! `manifest.get("...").and_then(|v| v.as_str())` reads so unknown
 //! shapes fail loudly at parse time and every read site shares one
 //! validator.
 //!
-//! Schema v1 is the only shape this CLI accepts. The pre-v1 wheel-based
-//! bundles (with `package` / `module` / `framework` fields) never
-//! escaped the openhtf-source-shipping branch, so there's nothing to
-//! migrate from. When the schema bumps to v2 we'll add a `Manifest::V2`
-//! arm; until then a missing or non-v1 manifest is a hard error.
+//! Versions 1 and 2 share one shape. Version 2 is written for standalone
+//! bundles only: their wheels are installed as files, and a CLI that
+//! predates it would instead install a standalone bundle through
+//! `pylock.toml`, reaching for the index the bundle exists to avoid. Every
+//! CLI refuses a version it does not know ("run `tofupilot update`"), so
+//! the bump is what keeps an old station off these bundles. A sync bundle
+//! stays at version 1, which every CLI installs. Any other version, or none,
+//! is a hard error.
 
 use std::path::Path;
 
@@ -32,9 +35,9 @@ pub enum V1Kind {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct V1 {
-    /// Schema version. Always `1` for this enum; the parser hard-fails on
-    /// any other value so a v2 bundle reaches a CLI that can't read it
-    /// with a clear "unsupported manifest version" error.
+    /// Schema version, `1` or `2` (see the module doc); the parser
+    /// hard-fails on any other value so a newer bundle reaches a CLI that
+    /// can't read it with a clear "unsupported manifest version" error.
     pub version: u32,
     #[serde(flatten)]
     pub kind: V1Kind,
@@ -73,6 +76,20 @@ pub struct SourceManifest {
     /// [`is_safe_entry_point`].
     #[serde(default)]
     pub entry_point: Option<String>,
+    /// Git state of the project when `tofupilot build` made the bundle,
+    /// shown on the deployment: it describes this bundle whatever changes
+    /// in the sources after. `None` for cloud builds and outside git.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git: Option<GitState>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GitState {
+    /// Full sha of `HEAD`, 40 lowercase hex characters.
+    pub commit: String,
+    /// The build root had changes not in `commit`: modified, staged or
+    /// untracked files that are not ignored.
+    pub dirty: bool,
 }
 
 #[derive(Debug)]
@@ -139,9 +156,8 @@ impl std::error::Error for ManifestError {
 
 impl Manifest {
     /// Read + parse a manifest.json. Missing file, missing `version`, or
-    /// any version other than 1 is a hard error — the new pipeline
-    /// always emits a v1 manifest, so a bundle without one is corrupt
-    /// or from a future CLI we don't know how to read.
+    /// any version other than 1 or 2 is a hard error: a bundle without one
+    /// is corrupt or from a future CLI we don't know how to read.
     pub fn parse(path: &Path) -> Result<Self, ManifestError> {
         let bytes = std::fs::read(path).map_err(|e| ManifestError::Read {
             path: path.display().to_string(),
@@ -159,12 +175,12 @@ impl Manifest {
                 source,
             })?;
 
-        // Route by `version`. Only `1` is accepted; anything else is a
-        // hard error so a future bundle on an old CLI doesn't get
+        // Route by `version`. Only `1` and `2` are accepted; anything else
+        // is a hard error so a future bundle on an old CLI doesn't get
         // silently misread, and a corrupt / pre-v1 manifest doesn't get
         // accepted as a no-op.
         match raw.get("version").and_then(|v| v.as_u64()) {
-            Some(1) => {
+            Some(1 | 2) => {
                 let v1: V1 =
                     serde_json::from_value(raw).map_err(|source| ManifestError::SchemaV1 {
                         path: path.display().to_string(),
@@ -249,6 +265,26 @@ impl V1 {
                             path: path_str(),
                             field: "platform",
                             reason: "must be non-empty and ≤ 64 chars".into(),
+                        });
+                    }
+                }
+                if self.version == 2 && s.mode != Mode::Standalone {
+                    return Err(ManifestError::InvalidField {
+                        path: path_str(),
+                        field: "version",
+                        reason: "version 2 is for standalone bundles only".into(),
+                    });
+                }
+                if let Some(git) = &s.git {
+                    let hex = |c: char| c.is_ascii_digit() || ('a'..='f').contains(&c);
+                    if git.commit.len() != 40 || !git.commit.chars().all(hex) {
+                        return Err(ManifestError::InvalidField {
+                            path: path_str(),
+                            field: "git",
+                            reason: format!(
+                                "expected a 40-character commit sha, got {:?}",
+                                git.commit
+                            ),
                         });
                     }
                 }
@@ -370,6 +406,7 @@ mod tests {
                 runtime_version: "3.12.13".into(),
                 platform: None,
                 entry_point: Some("main.py".into()),
+                git: None,
             }),
         };
         let json = serde_json::to_string(&original).unwrap();
@@ -391,6 +428,56 @@ mod tests {
             ),
             "got: {err:?}"
         );
+    }
+
+    #[test]
+    fn version_2_is_a_standalone_bundle_with_its_git_state() {
+        let bytes = br#"{"version":2,"kind":"source","mode":"standalone","runtime_version":"3.12.13","platform":null,"git":{"commit":"2fa7a945d6c0ffee2fa7a945d6c0ffee2fa7a945","dirty":true}}"#;
+        let Manifest::V1(m) = Manifest::parse_bytes(&p(), bytes).unwrap();
+        assert_eq!(m.version, 2);
+        let V1Kind::Source(s) = m.kind;
+        assert_eq!(s.mode, Mode::Standalone);
+        let git = s.git.unwrap();
+        assert!(git.dirty);
+        assert_eq!(git.commit.len(), 40);
+    }
+
+    #[test]
+    fn version_2_is_refused_for_a_sync_bundle() {
+        let bytes = br#"{"version":2,"kind":"source","mode":"sync","runtime_version":"3.12.13"}"#;
+        let err = Manifest::parse_bytes(&p(), bytes).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                ManifestError::InvalidField {
+                    field: "version",
+                    ..
+                }
+            ),
+            "got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn a_short_or_uppercase_commit_is_refused() {
+        for commit in ["2fa7a945d6", "2FA7A945D6C0FFEE2FA7A945D6C0FFEE2FA7A945"] {
+            let doc = format!(
+                r#"{{"version":2,"kind":"source","mode":"standalone","runtime_version":"3.12.13","git":{{"commit":"{commit}","dirty":false}}}}"#
+            );
+            let err = Manifest::parse_bytes(&p(), doc.as_bytes()).unwrap_err();
+            assert!(
+                matches!(err, ManifestError::InvalidField { field: "git", .. }),
+                "{commit}: {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn version_3_asks_for_an_update() {
+        let bytes =
+            br#"{"version":3,"kind":"source","mode":"standalone","runtime_version":"3.12.13"}"#;
+        let err = Manifest::parse_bytes(&p(), bytes).unwrap_err();
+        assert!(err.to_string().contains("run `tofupilot update`"), "{err}");
     }
 
     #[test]

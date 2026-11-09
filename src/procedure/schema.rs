@@ -3813,7 +3813,7 @@ impl ProcedureDefinition {
     /// and a plug bound to a class other than the one the file names.
     ///
     /// The deployable tree is what a build tars: the enclosing uv
-    /// workspace root when one exists (`clone-context.ts`), else the
+    /// workspace root when one exists (`build-command.ts`), else the
     /// procedure directory alone. A file outside it loads here and is
     /// missing on the station, so it is an error, with the fix in the
     /// message. Only the calls written in the procedure (depth 1) get a
