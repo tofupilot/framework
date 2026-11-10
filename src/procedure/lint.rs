@@ -1,8 +1,8 @@
 //! The procedure lint: loader refusals, reference findings and deprecation
 //! warnings as one list, with a stable `code` and a position on each.
 //!
-//! One list for every surface — `tofupilot validate`, Studio's Issues
-//! panel and the assistant's guardrail through `lint`, the run's start
+//! One list for every surface — `tofupilot validate` and Studio's Issues
+//! panel through `lint`, the run's start
 //! gate and `deploy` through `references` — so they cannot report
 //! different rules for the same file.
 

@@ -241,8 +241,8 @@ pub fn from_str_located<T: DeserializeOwned>(
         Ok(value) => Ok((value, all_warnings(&repaired, &prepared), positions)),
         Err(err) => {
             // The user formatter: the default one advises the reader to change
-            // parser options or Rust types, which a procedure author (and the
-            // Studio assistant, which receives these messages) cannot do.
+            // parser options or Rust types, which a procedure author (or a
+            // coding agent reading `validate --json`) cannot do.
             let message = serde_saphyr::UserMessageFormatter
                 .format_message(&err)
                 .into_owned();

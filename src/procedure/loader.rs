@@ -2898,8 +2898,13 @@ main:
         - type: text
 "#,
         );
-        // The same key in two phases is fine: the slot is per phase.
-        let problems = def.resolve_runtime_refs(&dir, None);
+        // The same key in two phases is fine: the slot is per phase. (The
+        // two screens running at once are a separate notice.)
+        let problems: Vec<_> = def
+            .resolve_runtime_refs(&dir, None)
+            .into_iter()
+            .filter(|p| p.code != crate::procedure::codes::PHASE_CONCURRENCY)
+            .collect();
         assert!(problems.is_empty(), "unexpected: {problems:?}");
         std::fs::remove_dir_all(&dir).ok();
     }

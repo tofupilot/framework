@@ -25,6 +25,9 @@ pub const UNKNOWN_MARKER: &str = "unknown_marker";
 /// A marker where markers do not resolve: kept as text.
 pub const MARKER_AS_TEXT: &str = "marker_as_text";
 pub const BARE_DURATION: &str = "bare_duration";
+/// Two phases of one stage that no `depends_on` orders, sharing a plug
+/// or one of them showing an operator screen: they run at the same time.
+pub const PHASE_CONCURRENCY: &str = "phase_concurrency";
 /// A secret passed through `env:`, which every child process inherits.
 pub const SECRET_IN_ENV: &str = "secret_in_env";
 /// Python source that does not compile.

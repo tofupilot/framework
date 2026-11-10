@@ -78,8 +78,8 @@ pub enum StationEvent {
     /// The daemon is building or rebuilding a procedure's Python
     /// environment (`uv venv`, `uv pip install` or `uv sync`), or just
     /// finished. Emitted by the Studio daemon only, whichever caller
-    /// asked for the venv: the Run button, the assistant's `python_env`
-    /// or `plug_methods`, the plug debugger. A first install or a
+    /// asked for the venv: the Run button, `plug_methods`, the plug
+    /// debugger. A first install or a
     /// rebuild after a dependency edit takes a minute with no other
     /// sign of life, and every other venv-touching request waits on
     /// it. Not a run event: no `execution_id`, the run-state reducer
@@ -1011,9 +1011,7 @@ pub enum StationCommand {
         /// Partial run: execute only this main phase — plus its
         /// transitive `depends_on` closure and every setup/teardown
         /// phase. Sent by the Studio Builder's per-phase play button.
-        /// None runs the whole procedure. Older daemons ignore the
-        /// field, which is why the web gates the button on the
-        /// `partial_run` hello capability.
+        /// None runs the whole procedure.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         only_phase: Option<String>,
     },
@@ -1528,7 +1526,7 @@ pub struct PresenceDraft {
 }
 
 // ---------------------------------------------------------------------------
-// Studio RPC (dashboard Studio <-> CLI daemon)
+// Studio RPC (local Studio page <-> `tofupilot studio`)
 // ---------------------------------------------------------------------------
 //
 // Request/response pairs for the Studio surface: file browsing, file
@@ -1538,13 +1536,14 @@ pub struct PresenceDraft {
 // Keeping them in this crate gives Studio the same Rust→TS codegen and
 // CI drift check as the station wire types.
 //
-// Compatibility policy: additive-only. New ops/response variants may be
-// added; existing fields are never repurposed. Servers answer an
-// unrecognized op with `Error { code: Unsupported }` rather than
-// dropping the request, so a newer dashboard talking to an older daemon
-// gets a typed failure instead of a hung promise.
+// The page and the daemon ship in the same CLI binary (the page is the
+// embedded `apps/operator-ui` bundle the daemon serves), so the two always
+// speak the same revision of this protocol. Servers still answer an
+// unrecognized op with `Error { code: Unsupported }` rather than dropping
+// the request, so a malformed request gets a typed failure instead of a
+// hung promise.
 
-/// A Studio operation requested by the dashboard.
+/// A Studio operation requested by the local Studio page.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[cfg_attr(feature = "specta", derive(specta::Type))]
 #[serde(tag = "op", rename_all = "snake_case")]
@@ -1586,61 +1585,13 @@ pub enum StudioRequest {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         path: Option<String>,
     },
-    /// Validate proposed procedure content WITHOUT writing it to disk.
-    /// `path` is where the file would live (it carries the extension
-    /// check and, later, relative resolution); the target need not
-    /// exist. Lets a client surface diagnostics on a proposal before
-    /// asking the user to approve the write. Replies `Diagnostics`.
-    ValidateContent { path: String, content: String },
-    /// Write a binary project resource from a base64 payload. Confined
-    /// to the `resources/` subtree, extension-allowlisted and
-    /// size-capped by the daemon; resource bytes never transit through
-    /// a model. Unlike `write_file` there is no diff to review, so the
-    /// guard is coarser: an existing target is refused with
-    /// `Error { code: Conflict }` (message carries its sha256) unless
-    /// `overwrite` is set — what sits in `resources/` is what a running
-    /// procedure reads off the bench, and must not vanish on a filename
-    /// collision. Replies `Written` with the sha256 of the decoded bytes.
-    WriteResource {
-        path: String,
-        content_base64: String,
-        #[serde(default)]
-        overwrite: bool,
-    },
     /// Structured view of the project's procedure, parsed by the
     /// engine's real loader. This is the single source the sequence
     /// tree / inspector consume — clients never parse YAML themselves.
     GetSequence {},
-    /// The config and secrets the active procedure (or the one at `path`)
-    /// declares, and whether a source run would find a value for each in
-    /// the shell or the procedure's `.env`. Key names and status only:
-    /// no value, and nothing of the `.env` content, ever leaves the
-    /// daemon. Answers `EnvStatus`.
-    EnvStatus {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        path: Option<String>,
-    },
-    /// The Python environment the active procedure's code runs in:
-    /// interpreter, version, venv, where its dependencies are declared
-    /// and what is installed. Resolved through the SAME `ensure_venv`
-    /// discipline as Run and the plug debugger, so the answer can never
-    /// name an environment the procedure will not actually use — and,
-    /// like them, it PROVISIONS a missing venv rather than reporting
-    /// one. Refused `Busy` while a run is active, and under an open plug
-    /// debug session when the venv would be built or rebuilt (the
-    /// session's process runs on it): provisioning can
-    /// rebuild the venv the run is executing in. Answers `PythonEnv`.
-    PythonEnv {},
-    /// The procedure YAML's JSON Schema as THIS engine accepts it: every
-    /// field the loader knows, with its description. The assistant takes
-    /// its field inventory from here, so the list matches the engine that
-    /// will run the file rather than the web build. Static per daemon
-    /// build; a client may cache it by the `version` the answer carries.
-    /// Answers `ProcedureSchema`.
-    ProcedureSchema {},
     /// Projects this session may switch between: the roots a human
     /// granted, past sessions included. Never a filesystem listing —
-    /// the dashboard cannot enumerate the host from here.
+    /// the page cannot enumerate the host from here.
     ListProjects {},
     /// Make one of the granted roots active. `path` must already be in
     /// the granted set: this op selects, it never grants. An unknown
@@ -1659,28 +1610,6 @@ pub enum StudioRequest {
     /// describe a tree), so the UI owes the user a confirmation naming
     /// what goes — the daemon cannot make that judgement.
     DeleteEntry { path: String },
-    /// Copy `from` to `to`, both root-relative. A directory is copied
-    /// with its contents.
-    ///
-    /// A server op rather than read+write from the page, for two
-    /// reasons: `ReadFile` refuses anything outside the text allow-list,
-    /// so a client-side copy could not carry a `.png`, and a directory
-    /// would need one round trip per entry.
-    ///
-    /// Two things are deliberately NOT copied, matching what the tree
-    /// shows rather than what the disk holds: symlinks (following one
-    /// would pull in data from outside the project) and the excluded
-    /// directories (`.git`, `venv`, `node_modules`, …) — duplicating a
-    /// procedure folder should not duplicate its virtualenv.
-    CopyEntry { from: String, to: String },
-    /// Move `from` to `to`, both root-relative. One op covers rename
-    /// (same parent, new name) and move (new parent): they are the same
-    /// filesystem operation, and splitting them would duplicate the
-    /// confinement checks that are the whole risk here.
-    ///
-    /// Refuses when `to` already exists rather than overwriting —
-    /// clobbering someone's file is not a rename.
-    MoveEntry { from: String, to: String },
     /// Make one of the project's discovered procedures active. `path`
     /// must be one of the paths `ProjectInfo` listed: like
     /// `OpenProject`, this selects among what the daemon found, it
@@ -1797,6 +1726,21 @@ pub enum StudioRequest {
     /// `ProcedureLinkSet { link: None }`, not an error — unlink must be
     /// idempotent. Answers `ProcedureLinkSet`.
     UnlinkProcedure { path: String },
+    /// The dashboard procedures a run can be linked to and uploaded
+    /// under, fetched by the daemon with the CLI's own login (the page
+    /// holds no dashboard credential). First page only, up to 100,
+    /// newest first. Refused `NotLoggedIn` without a login. Answers
+    /// `DashboardProcedures`.
+    ListDashboardProcedures {},
+}
+
+/// A procedure of the logged-in organization, as `ListDashboardProcedures`
+/// lists it.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[cfg_attr(feature = "specta", derive(specta::Type))]
+pub struct StudioDashboardProcedure {
+    pub id: String,
+    pub name: String,
 }
 
 /// A project root the session can switch to.
@@ -1839,9 +1783,9 @@ pub struct StudioProcedure {
     /// Root-relative directory its `python:` references resolve from and
     /// its run executes in, `""` for the project root: the folder of the
     /// nearest `pyproject.toml` above the file (the package dir a
-    /// deployment gets), else `dir`. Absent from daemons older than this
-    /// field, and when that folder lies above the opened root, where no
-    /// root-relative path names it: read `dir` then.
+    /// deployment gets), else `dir`. Absent when that folder lies above
+    /// the opened root, where no root-relative path names it: read `dir`
+    /// then.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub package_dir: Option<String>,
     /// Display name: the definition's own `name:` when it reads, else
@@ -1857,73 +1801,33 @@ pub struct StudioProcedure {
     pub link: Option<StudioProcedureLink>,
 }
 
-/// One declared config value or secret in `StudioResponse::EnvStatus`.
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "specta", derive(specta::Type))]
-pub struct StudioEnvKey {
-    /// `config` or `secret`.
-    pub kind: String,
-    pub key: String,
-    pub required: bool,
-    /// Where a source run takes its value from: `shell`, `dotenv` or
-    /// `default`. None when it has none.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source: Option<String>,
-    /// Required and without a value: a run is refused (not configured).
-    pub missing: bool,
-}
-
 /// Reply to a `StudioRequest`. Every request maps to exactly one
 /// variant (or `Error`).
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[cfg_attr(feature = "specta", derive(specta::Type))]
 #[serde(tag = "result", rename_all = "snake_case")]
 pub enum StudioResponse {
-    /// `EnvStatus`: every declared key, config first, then by name.
-    EnvStatus {
-        /// Root-relative path of the procedure's `.env`, whether or not
-        /// it exists.
-        dotenv_path: String,
-        dotenv_exists: bool,
-        keys: Vec<StudioEnvKey>,
-    },
     /// `ProjectInfo`'s answer while a project is open. See `NoProject`
     /// for the other answer the same request can get.
     ProjectInfo {
         /// Absolute studio root on the daemon host. Display-only for
-        /// the dashboard; all request paths stay root-relative.
+        /// the page; all request paths stay root-relative.
         root: String,
         name: String,
-        /// The daemon's own semver (`CARGO_PKG_VERSION`), so the
-        /// dashboard can warn below its manually-set recommendation
-        /// (`RECOMMENDED_DAEMON_VERSION`, apps/web
-        /// `studio/daemon-version.ts`) — a "please update, some
-        /// features may not work" toast, never a refusal. Optional on
-        /// the wire because released daemons predate the field —
-        /// exactly the daemons worth warning about, which is why the
-        /// dashboard treats "absent" as below any recommendation.
+        /// The daemon's own semver (`CARGO_PKG_VERSION`).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         version: Option<String>,
         /// Root-relative path of the ACTIVE procedure definition (e.g.
         /// `procedure.yaml`), when the project holds one. Kept as the
-        /// single active path it always was: older dashboards read only
-        /// this and must keep working.
+        /// single active path.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         procedure_path: Option<String>,
         /// Every procedure found under the root, the active one
-        /// included, ordered root-first then by path. This daemon
-        /// always sends `Some` (an empty list on a folder holding
-        /// none), but the field is optional on the wire because the
-        /// dashboard also meets OLDER daemons that predate it — the
-        /// web already models that as `?? null`; the type now says so
-        /// instead of contradicting it.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        procedures: Option<Vec<StudioProcedure>>,
+        /// included, ordered root-first then by path. Empty on a folder
+        /// holding none.
+        procedures: Vec<StudioProcedure>,
         /// The daemon host's OS as Rust names it (`macos`, `windows`,
-        /// `linux`). Sent so a client — the assistant above all — stops
-        /// guessing the shell, the path separator and the install
-        /// command of the machine it is editing. Optional on the wire
-        /// because released daemons predate it.
+        /// `linux`).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         os: Option<String>,
         /// The host's CPU architecture (`aarch64`, `x86_64`). Same
@@ -1971,14 +1875,6 @@ pub enum StudioResponse {
         /// Root-relative path that is gone from the project.
         path: String,
     },
-    Moved {
-        from: String,
-        to: String,
-    },
-    Copied {
-        from: String,
-        to: String,
-    },
     Diagnostics {
         diagnostics: Vec<StudioDiagnostic>,
     },
@@ -2015,48 +1911,9 @@ pub enum StudioResponse {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         link: Option<StudioProcedureLink>,
     },
-    /// `PythonEnv`'s answer: the environment the active procedure runs in.
-    PythonEnv {
-        /// Absolute interpreter path, e.g. `<project>/venv/bin/python`.
-        python: String,
-        /// Absolute venv directory holding that interpreter.
-        venv: String,
-        /// `X.Y.Z` as the interpreter itself reports it.
-        python_version: String,
-        /// Where this procedure's dependencies are declared. `None` is
-        /// not an error — it means the venv was created empty, so every
-        /// third-party import fails until a deps file exists.
-        deps_source: StudioDepsSource,
-        /// Display path of that file, absent on `"none"`. Root-relative
-        /// when it sits inside the project (see `deps_in_project`),
-        /// absolute when it is an ancestor uv-workspace pyproject.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        deps_path: Option<String>,
-        /// Whether `deps_path` is root-relative, i.e. reachable by the
-        /// file ops of this protocol. False for a workspace pyproject
-        /// above the project root: it governs the venv but cannot be
-        /// edited from here.
-        deps_in_project: bool,
-        /// Installed distributions as `name==version`: the ones the
-        /// dependency file declares first, then the rest, each part
-        /// sorted case-insensitively; capped
-        /// at 200. The cap is the daemon's (`PYTHON_ENV_PACKAGE_CAP` in
-        /// `apps/cli/src/local_ws/studio.rs`), not a wire constant:
-        /// specta exports types, not consts, so a number here would
-        /// reach no client. The CI driver
-        /// `apps/cli/tests/studio/python_env_rpc.py` restates it, and
-        /// this comment is what keeps the two honest.
-        packages: Vec<String>,
-        /// Total installed distributions before the cap.
-        package_count: u32,
-    },
-    /// `ProcedureSchema`'s answer: the schema document, serialized.
-    ProcedureSchema {
-        /// This daemon's version, the cache key for the schema.
-        version: String,
-        /// The JSON Schema (draft 2020-12) of `procedure.yaml`, as JSON
-        /// text. Rendered into the assistant's prompt by the web app.
-        schema_json: String,
+    /// `ListDashboardProcedures`' answer.
+    DashboardProcedures {
+        procedures: Vec<StudioDashboardProcedure>,
     },
     /// `PlugMethods`' answer: the class's own methods, source order.
     PlugMethodList {
@@ -2195,11 +2052,8 @@ pub struct StudioSequence {
     pub teardown: Vec<StudioSequencePhase>,
     /// The sequence calls the procedure makes, parents before children,
     /// in file order. The phases they brought in are in the three lists
-    /// above with a `sequence_path`; this is the tree over them. Absent
-    /// from daemons that predate sequences, hence optional.
-    // Always sent, empty included (see the lists above). `default` alone
-    // is what types it optional: a daemon older than sequences omits it.
-    #[serde(default)]
+    /// above with a `sequence_path`; this is the tree over them. Always
+    /// sent, empty included (see the lists above).
     pub sequences: Vec<StudioSequenceCall>,
 }
 
@@ -2337,13 +2191,6 @@ pub struct StudioSequencePlug {
     /// empty included, which is the rule `StudioSequence.plugs` states —
     /// a list the wire omits generates a non-optional TS field and
     /// crashes the page on `undefined.map`.
-    ///
-    /// `serde(default)` is for the other direction, and it is why the
-    /// generated TS declares this one optional: a Studio daemon older
-    /// than the web app it is paired with sends a plug with no `config`
-    /// at all, and the Builder has to read that as "no keys" rather
-    /// than fail to parse the whole sequence.
-    #[serde(default)]
     pub config: Vec<StudioSequencePlugConfigEntry>,
 }
 
@@ -2398,8 +2245,6 @@ pub struct StudioSequenceUnit {
     /// (serial + part always, then revision/batch/sub-units/metadata
     /// as configured). Lets Studio preview the real station screen
     /// without re-deriving the shape from the field configs above.
-    /// `serde(default)` so payloads from older daemons still parse.
-    #[serde(default)]
     pub components: Vec<UiComponent>,
 }
 
@@ -2445,24 +2290,16 @@ pub struct StudioSequenceUnitField {
 
 /// A phase's `executable:` block, projected for the editor.
 ///
-/// Separate from the `executable` flag next to it for the same reason
-/// `ui_components` sits next to `ui`: the flag answers the tree's badge
-/// in one byte, this answers the Inspector's fields. It also keeps the
-/// flag's meaning stable for a dashboard talking to an older daemon,
-/// which sends the flag and not this. The dashboard edits the block's
-/// fields only when the block arrived, and reads the
-/// `phase_executable` capability for the fallback message's wording
-/// alone — switching a phase's runtime is deliberately not gated on
-/// either (the trade-off is stated on the Runtime Select,
-/// `phase-edit-page.tsx`).
+/// Separate from the `executable` flag next to it: the flag answers the
+/// tree's badge in one byte, this answers the Inspector's fields.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[cfg_attr(feature = "specta", derive(specta::Type))]
 pub struct StudioSequenceExecutable {
     /// May be empty: "runtime declared, command not chosen yet" is a
     /// legal state of the file. The engine loads it,
-    /// `resolve_runtime_refs` reports it (Code's issues panel, the
-    /// assistant), and the runner refuses to start on it — it is never
-    /// refused at load.
+    /// `resolve_runtime_refs` reports it (the Issues badge, `validate`),
+    /// and the runner refuses to start on it — it is never refused at
+    /// load.
     pub command: String,
     /// `bash|sh|zsh|powershell|pwsh|cmd`, absent when the file states
     /// none — the engine then defaults per platform.
@@ -2484,15 +2321,10 @@ pub struct StudioSequencePhase {
     pub enabled: bool,
     pub measurements: Vec<StudioSequenceMeasurement>,
     pub depends_on: Vec<String>,
-    /// Count of operator UI components (kept for the tree badges; the
-    /// editable projection is `ui`).
-    pub ui_components: u32,
     /// Phase runs an external executable (v2's shell equivalent).
     pub executable: bool,
     /// The `executable:` block itself, for the Inspector's fields.
-    /// `None` on a Python or code-less phase — and also on any phase
-    /// projected by a daemon predating the `phase_executable`
-    /// capability, which is why an edit gates on the capability.
+    /// `None` on a Python or code-less phase.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub executable_config: Option<StudioSequenceExecutable>,
     /// Timeout in ms. u32 because the TS codegen forbids BigInt-mapped
@@ -2506,10 +2338,8 @@ pub struct StudioSequencePhase {
     /// Instance keys of the sequence calls this phase came through; absent
     /// for a phase written in the procedure. The tree nests the phase
     /// under `StudioSequence::sequences[path]`, and an edit of it goes to
-    /// that call's file, not the procedure's.
-    // Always sent, empty included. `default` alone types it optional: a
-    // daemon older than sequences omits it.
-    #[serde(default)]
+    /// that call's file, not the procedure's. Always sent, empty
+    /// included.
     pub sequence_path: Vec<String>,
     /// The sequence file and the entry's place in it, for a phase of a
     /// sequence: where the Inspector writes.
@@ -2568,11 +2398,7 @@ pub struct StudioSequenceUi {
     ///
     /// Here and not on `UiComponent`: that type is the runtime's, shared
     /// with the operator UI, and this describes the file for the editor
-    /// alone. Absent from a daemon that predates the
-    /// `component_key_stated` capability (`serde(default)` so its payload
-    /// still parses) — the Builder gates on the capability, never on
-    /// this being non-empty.
-    #[serde(default)]
+    /// alone.
     pub keys_stated: Vec<bool>,
 }
 
@@ -2670,7 +2496,7 @@ pub enum VenvBootstrapStage {
     Finished,
 }
 
-/// Which file `PythonEnv` found the procedure's dependencies in. An
+/// Which file a procedure's dependencies are declared in. An
 /// enum rather than a string so the TypeScript export is the closed
 /// union a client can branch on: the daemon's detection and the
 /// browser's reading of it cannot drift apart.
@@ -2748,9 +2574,8 @@ pub enum StudioDiagnosticSeverity {
     Warning,
 }
 
-/// Typed failure for a Studio request. `Unsupported` is the
-/// forward-compat arm: an older daemon answers ops it doesn't know
-/// with it instead of dropping the request.
+/// Typed failure for a Studio request. `Unsupported` answers an op the
+/// daemon cannot serve (an unknown op, no folder dialog on this host).
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "specta", derive(specta::Type))]
 #[serde(rename_all = "snake_case")]
@@ -2780,6 +2605,9 @@ pub enum StudioErrorCode {
     /// project is. The page's welcome state never sends such a request;
     /// a stale tab or a second client can.
     NoProject,
+    /// The request needs the dashboard and the CLI holds no login: the
+    /// fix is `tofupilot login`, not a retry.
+    NotLoggedIn,
 }
 
 // ---------------------------------------------------------------------------

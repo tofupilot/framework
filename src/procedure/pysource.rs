@@ -1,7 +1,7 @@
 //! Static scan of a Python source file, for the procedure lint.
 //!
 //! A line scan rather than a parser, deliberately — and the SAME scan the
-//! Studio Inspector runs in the browser (`apps/web/components/studio/ide/
+//! Studio Inspector runs in the browser (`apps/operator-ui/src/studio/ide/
 //! python-target.ts`): the file may not be valid Python while it is being
 //! written, nothing here imports it (importing a plug module can open a
 //! serial port), and the two surfaces must agree on what "the class is

@@ -14,11 +14,11 @@ pub use super::values::{ConfigSpecYaml, SecretSpecYaml, ValueType};
 
 /// The procedure YAML as a JSON Schema: every field the loader accepts,
 /// with the doc comment on the Rust field as its `description`. This is
-/// the ONE inventory of the format. The Studio assistant reads the field
-/// list from it (through the daemon, so the list matches the engine that
-/// will run the file), `export-schema` commits a copy for the web and the
-/// CI drift check, and a test refuses a field without a description: a
-/// field added here reaches the assistant on its own, or fails the build.
+/// the ONE inventory of the format. `tofupilot schema` prints it and
+/// `tofupilot agents-md` writes it next to a project, so coding agents
+/// read the field list of the engine that will run the file;
+/// `export-schema` commits a copy for the CI drift check, and a test
+/// refuses a field without a description.
 #[cfg(feature = "json-schema")]
 pub fn procedure_json_schema() -> serde_json::Value {
     let schema = schemars::schema_for!(ProcedureYaml);
@@ -27,7 +27,7 @@ pub fn procedure_json_schema() -> serde_json::Value {
 
 /// The aspect ratios an `image` (or an image grid) accepts, as
 /// `validate_aspect` checks them and as the schema lists them: one
-/// list, so the assistant is never told a value the loader refuses.
+/// list, so a coding agent is never told a value the loader refuses.
 pub const IMAGE_ASPECTS: &[&str] = &["16/9", "4/3", "3/4", "2/3", "9/16", "square", "auto"];
 
 /// The object-fit values an `image` accepts (`validate_fit`), same rule.
@@ -3519,7 +3519,7 @@ impl Serialize for PhaseEntryYaml {
     }
 }
 
-/// `anyOf` of the two shapes, so the assistant reads a setup, main or
+/// `anyOf` of the two shapes, so a coding agent reads a setup, main or
 /// teardown entry as "a phase, or a sequence call".
 #[cfg(feature = "json-schema")]
 impl schemars::JsonSchema for PhaseEntryYaml {
@@ -4356,6 +4356,9 @@ impl ProcedureDefinition {
                 RefLocation::key(RefList::Root, 0, "ui.panel"),
             ));
         }
+        // The plug keys each phase's function takes, for the concurrency
+        // notice once every phase has been read.
+        let mut plugs_used: HashMap<String, Vec<String>> = HashMap::new();
         let lists = [
             (RefList::Setup, &self.setup),
             (RefList::Main, &self.main),
@@ -4874,6 +4877,24 @@ impl ProcedureDefinition {
                             // A `vars` parameter is checked without `with:`
                             // too: the old name of `config` fails every run.
                             if let Some(params) = pysource::function_signature(&source, &callable) {
+                                let mut used: Vec<String> = params
+                                    .iter()
+                                    .filter(|p| p.stars == 0)
+                                    .filter_map(|p| {
+                                        let name = phase
+                                            .plug_aliases
+                                            .iter()
+                                            .find(|(alias, _)| alias.eq_ignore_ascii_case(&p.name))
+                                            .map_or(p.name.as_str(), |(_, key)| key.as_str());
+                                        self.plugs
+                                            .iter()
+                                            .find(|pl| pl.key.eq_ignore_ascii_case(name))
+                                            .map(|pl| pl.key.clone())
+                                    })
+                                    .collect();
+                                used.sort();
+                                used.dedup();
+                                plugs_used.insert(phase.key.clone(), used);
                                 let named = |name: &str| {
                                     params.iter().any(|p| p.stars == 0 && p.name == name)
                                 };
@@ -5334,7 +5355,142 @@ impl ProcedureDefinition {
                 }
             }
         }
+        problems.extend(self.concurrency_problems(&plugs_used, main_filter));
         problems.extend(self.missing_imports(procedure_dir, main_filter));
+        problems
+    }
+
+    /// Phases of one stage that no `depends_on` orders run at the same
+    /// time, as many as `execution.workers` allows (8 by default): two of
+    /// them driving one plug interleave its commands, and a phase waiting
+    /// for the operator runs while its siblings already measure. One notice
+    /// per list, naming each clash: a plug may be safe to share, a screen
+    /// may be meant to stay up during the measurements.
+    fn concurrency_problems(
+        &self,
+        plugs_used: &HashMap<String, Vec<String>>,
+        main_filter: Option<&HashSet<String>>,
+    ) -> Vec<RefProblem> {
+        if self.execution.as_ref().is_some_and(|e| e.workers <= 1) {
+            return Vec::new();
+        }
+        let all = self.get_all_phases_with_stage_scope();
+        let stage_of: HashMap<&str, StageScope> =
+            all.iter().map(|(s, p)| (p.key.as_str(), *s)).collect();
+        let deps: HashMap<&str, &[String]> = all
+            .iter()
+            .map(|(_, p)| (p.key.as_str(), p.depends_on.as_slice()))
+            .collect();
+        let reaches = |from: &str, to: &str| {
+            let mut seen: HashSet<&str> = HashSet::new();
+            let mut stack = vec![from];
+            while let Some(key) = stack.pop() {
+                for dep in deps.get(key).copied().unwrap_or_default() {
+                    if dep == to {
+                        return true;
+                    }
+                    if seen.insert(dep.as_str()) {
+                        stack.push(dep.as_str());
+                    }
+                }
+            }
+            false
+        };
+        // A display-only screen continues on its own: only one that waits
+        // for an answer holds the operator while the siblings run.
+        let waits_for_operator = |p: &PhaseDefinition| {
+            p.ui.as_ref().is_some_and(|u| {
+                u.requires_input == Some(true)
+                    || u.components
+                        .as_ref()
+                        .is_some_and(|c| c.iter().any(|c| c.component_type.is_input()))
+            })
+        };
+        let no_plugs: Vec<String> = Vec::new();
+        let plugs_of = |p: &PhaseDefinition| plugs_used.get(&p.key).unwrap_or(&no_plugs);
+        let mut problems = Vec::new();
+        let lists = [
+            (RefList::Setup, "Setup", &self.setup),
+            (RefList::Main, "Main", &self.main),
+            (RefList::Teardown, "Teardown", &self.teardown),
+        ];
+        for (list, label, phases) in lists {
+            let live: Vec<(usize, &PhaseDefinition)> = phases
+                .iter()
+                .enumerate()
+                .filter(|(_, p)| !p.should_skip())
+                .filter(|(_, p)| {
+                    list != RefList::Main || main_filter.is_none_or(|f| f.contains(&p.key))
+                })
+                .collect();
+            let mut keys: Vec<&str> = Vec::new();
+            let mut clashes: Vec<String> = Vec::new();
+            let mut at: Option<usize> = None;
+            let mut first: Option<(String, String)> = None;
+            for (i, &(index, phase)) in live.iter().enumerate() {
+                let clash = live[..i].iter().find_map(|&(_, other)| {
+                    if stage_of.get(other.key.as_str()) != stage_of.get(phase.key.as_str())
+                        || reaches(&phase.key, &other.key)
+                        || reaches(&other.key, &phase.key)
+                    {
+                        return None;
+                    }
+                    let (a, b) = (&other.key, &phase.key);
+                    if let Some(plug) = plugs_of(phase).iter().find(|k| plugs_of(other).contains(k))
+                    {
+                        Some((a, format!("`{a}` and `{b}` share plug `{plug}`")))
+                    } else if waits_for_operator(other) {
+                        Some((a, format!("`{a}` waits for the operator while `{b}` runs")))
+                    } else if waits_for_operator(phase) {
+                        Some((a, format!("`{b}` waits for the operator while `{a}` runs")))
+                    } else {
+                        None
+                    }
+                });
+                let Some((other, clash)) = clash else {
+                    continue;
+                };
+                for key in [other.as_str(), phase.key.as_str()] {
+                    if !keys.contains(&key) {
+                        keys.push(key);
+                    }
+                }
+                clashes.push(clash);
+                at.get_or_insert(index);
+                first.get_or_insert_with(|| (other.to_string(), phase.key.clone()));
+            }
+            let (Some(index), Some((before, after))) = (at, first) else {
+                continue;
+            };
+            const SHOWN: usize = 3;
+            let mut why = clashes[..clashes.len().min(SHOWN)].join("; ");
+            if clashes.len() > SHOWN {
+                why.push_str(&format!("; and {} more", clashes.len() - SHOWN));
+            }
+            let mut names = keys[..keys.len().min(6)]
+                .iter()
+                .map(|k| format!("`{k}`"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            if keys.len() > 6 {
+                names.push_str(&format!(" and {} more", keys.len() - 6));
+            }
+            // One clash already names its two phases; the list would repeat them.
+            let who = if clashes.len() == 1 {
+                String::new()
+            } else {
+                format!(" {names}")
+            };
+            problems.push(RefProblem {
+                code: codes::PHASE_CONCURRENCY,
+                severity: RefSeverity::Warning,
+                message: format!(
+                    "{label} phases{who} run at the same time: {why}. Order them with `depends_on` (e.g. `depends_on: [{before}]` on `{after}`), or set `execution.workers: 1` to run phases one at a time"
+                ),
+                location: self.written_location(list, index, "depends_on"),
+                hint: None,
+            });
+        }
         problems
     }
 
@@ -7429,7 +7585,7 @@ mod json_schema_tests {
     use super::*;
 
     /// Every property of every object in the schema must carry a
-    /// description: the assistant reads nothing else about a field.
+    /// description: `tofupilot schema` gives agents nothing else about a field.
     fn undocumented(node: &serde_json::Value, path: &str, out: &mut Vec<String>) {
         if let Some(props) = node.get("properties").and_then(|p| p.as_object()) {
             for (name, prop) in props {
