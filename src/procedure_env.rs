@@ -41,15 +41,29 @@ pub fn strip_inherited_std(cmd: &mut std::process::Command) {
     }
 }
 
+/// Ambient variables the host itself authenticates with (a CI runner's
+/// `TOFUPILOT_API_KEY`). They are not ignored: the host reads them and hands
+/// the same identity back to the procedure, so warning about them would be
+/// wrong.
+static HOST_CONSUMED: std::sync::OnceLock<Vec<&'static str>> = std::sync::OnceLock::new();
+
+/// Tell the engine which of [`PROCEDURE_ENV_VARS`] the host read as its own
+/// credentials, before the first spawn. Only the first call counts.
+pub fn mark_consumed_by_host(vars: &[&'static str]) {
+    let _ = HOST_CONSUMED.set(vars.to_vec());
+}
+
 /// Procedures used to inherit an ambient key silently. One warning per
 /// process when one is present, so a station that relied on that finds
 /// out from its log rather than from a 401 in a phase.
 fn warn_once_if_ambient() {
     static WARNED: Once = Once::new();
     WARNED.call_once(|| {
+        let consumed = HOST_CONSUMED.get().map(Vec::as_slice).unwrap_or(&[]);
         let ambient: Vec<&str> = PROCEDURE_ENV_VARS
             .iter()
             .copied()
+            .filter(|var| !consumed.contains(var))
             .filter(|var| std::env::var_os(var).is_some_and(|v| !v.is_empty()))
             .collect();
         if !ambient.is_empty() {
