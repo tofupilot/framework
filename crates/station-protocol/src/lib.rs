@@ -569,6 +569,9 @@ pub enum StationEvent {
         ///   * `not_configured`  — Required config or secrets have no value
         ///     on this station: the run was refused before identifying
         ///     the unit. `missing` names them.
+        ///   * `integrity_error` — The deployed procedure is not what was
+        ///     installed (a file modified, removed or added on the
+        ///     station): the run was refused. `error` names the files.
         error_kind: String,
         /// Matches the `execution_id` from `RunStarted`. Lets consumers
         /// drop crash events that race ahead of a freshly-started run.
