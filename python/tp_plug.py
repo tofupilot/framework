@@ -38,6 +38,99 @@ _original_stderr = sys.__stderr__
 
 
 
+# ============================================================================
+# Instrument identity
+# ============================================================================
+
+IDENTITY_FIELDS = ("manufacturer", "model", "serial_number", "firmware")
+# Longest a value may be: the dashboard stores these as short text.
+_IDENTITY_MAX_LEN = 255
+_AUTO_IDN_TIMEOUT_MS = 2000
+_MISSING = object()
+
+
+def parse_idn(response: str) -> Dict[str, str]:
+    """An IEEE 488.2 `*IDN?` answer, `<manufacturer>,<model>,<serial>,
+    <firmware>`. Fewer fields fill the first ones; a "0" serial or
+    firmware (what the standard allows when there is none) is no value."""
+    fields = [part.strip() for part in response.strip().split(",", 3)]
+    parsed = {}
+    for name, value in zip(IDENTITY_FIELDS, fields):
+        if value and not (name in ("serial_number", "firmware") and value == "0"):
+            parsed[name] = value
+    return parsed
+
+
+def _normalize_identity(value: Any) -> Dict[str, str]:
+    """What `identify()`, an attribute set or the YAML gives, as the four
+    fields: a string is a `*IDN?` answer, a dict is read field by field.
+    Anything else, and empty values, give nothing."""
+    if isinstance(value, str):
+        value = parse_idn(value)
+    if not isinstance(value, dict):
+        return {}
+    normalized = {}
+    for name in IDENTITY_FIELDS:
+        field = value.get(name)
+        if field is None or isinstance(field, bool):
+            continue
+        # A NUL (an EEPROM field padded with them) cannot be stored.
+        text = _cut_utf16(str(field).replace("\x00", "").strip(), _IDENTITY_MAX_LEN)
+        if text:
+            normalized[name] = text
+    return normalized
+
+
+def _cut_utf16(text: str, limit: int) -> str:
+    """`text` cut to `limit` UTF-16 code units, the unit the server counts:
+    a character beyond the Basic Multilingual Plane counts twice."""
+    while len(text.encode("utf-16-le")) // 2 > limit:
+        text = text[:-1]
+    return text.rstrip()
+
+
+def _takes_no_arguments(method: Any) -> bool:
+    """Whether `method` can be called with no argument."""
+    if not callable(method):
+        return False
+    try:
+        signature = inspect.signature(method)
+    except (TypeError, ValueError):
+        return True
+    return all(
+        p.default is not inspect.Parameter.empty or p.kind in (p.VAR_POSITIONAL, p.VAR_KEYWORD)
+        for p in signature.parameters.values()
+    )
+
+
+def _identity_from_attributes(instance: Any) -> Dict[str, str]:
+    """The identity fields set as plain attributes of the instance (or
+    its class). Properties are read too: identity is read once, after
+    `__init__`, so a property that queries the instrument is fine."""
+    found = {}
+    for name in IDENTITY_FIELDS:
+        try:
+            value = getattr(instance, name)
+        except Exception:
+            continue
+        # A `model` that is an ML model, a `firmware` object: not an identity.
+        if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+            continue
+        found.update(_normalize_identity({name: value}))
+    return found
+
+
+def _describe_identity(identity: Dict[str, str]) -> str:
+    text = " ".join(
+        identity[name] for name in ("manufacturer", "model") if name in identity
+    ) or "instrument"
+    if "serial_number" in identity:
+        text += f" S/N {identity['serial_number']}"
+    if "firmware" in identity:
+        text += f" (firmware {identity['firmware']})"
+    return text
+
+
 class _PlugConfigError(Exception):
     """The plug's reference or `with:` does not fit its class (no such
     class, an argument `__init__` does not take): said in one line, the
@@ -444,6 +537,18 @@ class LogCapturingStream:
 # Plug Service
 # ============================================================================
 
+# The VISA interfaces that carry IEEE 488.2 (`*IDN?` required and harmless):
+# GPIB, USBTMC and VXI-11 or HiSLIP over TCP/IP, all as `::INSTR`
+# resources. Serial (ASRL), raw sockets (`::SOCKET`) and the rest are not
+# asked anything.
+_IEEE488_INTERFACES = ("GPIB", "USB", "TCPIP")
+
+
+def _speaks_ieee488(resource: Any) -> bool:
+    name = str(getattr(resource, "resource_name", "") or "").strip().upper()
+    return name.endswith("::INSTR") and name.startswith(_IEEE488_INTERFACES)
+
+
 class PlugHandler:
     """Handles plug lifecycle and method calls"""
 
@@ -464,7 +569,10 @@ class PlugHandler:
         # usable by the next and a reader task runs between calls.
         self._loop = None
         self._initialized = False
+        self._identity: Optional[Dict[str, str]] = None
         self._init_error = None
+        # "init" while __init__ runs, "identify" while the identity is read.
+        self._init_stage = "init"
         self._init_start_time = time.time()
         # One method call at a time on the instance, like a SCPI socket.
         # Control requests (GetStatus, Cleanup, Shutdown) do NOT take
@@ -505,6 +613,10 @@ class PlugHandler:
     def _background_init(self):
         try:
             self._create_plug_instance()
+            # Read once, before the plug reports ready: GetStatus hands
+            # the cached result to every run that borrows this instance.
+            self._init_stage = "identify"
+            self._identity = self._resolve_identity()
             self._initialized = True
         except Exception as e:
             self._init_error = str(e)
@@ -612,6 +724,111 @@ class PlugHandler:
             if all(os.path.abspath(f.filename) == here for f in frames):
                 raise _PlugConfigError(f"{class_name}(): {e}") from None
             raise
+
+    def _resolve_identity(self) -> Optional[Dict[str, str]]:
+        """The instrument this plug opened, recorded with every run that
+        uses it. Four sources, each field taken from the strongest that
+        gives it: an automatic `*IDN?` on a pyvisa resource the plug
+        holds, the plug's identity attributes, its `identify()`, then the
+        `identity:` the procedure declares. `identity: false` in the YAML
+        or `identify = None` on the class turns it off. An instrument that
+        does not answer, or an identify() that raises, does not fail the
+        plug: it is recorded without identity, with a warning in the plug's
+        log. A read that blocks counts against the plug's init_timeout,
+        which then names this step."""
+        declared = self.plug_config.get("identity")
+        if declared is False:
+            return None
+        instance = self.plug_instance
+        identify = inspect.getattr_static(instance, "identify", _MISSING)
+        opted_out = identify is None
+
+        identity: Dict[str, str] = {}
+        if not opted_out:
+            from_attrs = _identity_from_attributes(instance)
+            if identify is _MISSING and not from_attrs:
+                identity.update(self._auto_idn())
+            identity.update(from_attrs)
+            # Only an identify() that takes no argument is an identity
+            # reader: identify(channel), identify(duration) are something
+            # else (flash a front panel to find the unit) and are left alone.
+            if identify is not _MISSING and _takes_no_arguments(getattr(instance, "identify", None)):
+                try:
+                    answer = instance.identify()
+                    # An async driver's identify() runs on the plug's own
+                    # loop, like its other methods.
+                    if inspect.iscoroutine(answer):
+                        answer = self._run_async(answer)
+                    reported = _normalize_identity(answer)
+                    if not reported:
+                        self.logs.info(
+                            f"{self.display_name}.identify() returned no identity ({type(answer).__name__}). "
+                            "If it is not an identity reader, set identify = None on the class."
+                        )
+                    identity.update(reported)
+                except Exception as e:
+                    self.logs.warning(
+                        f"{self.display_name}.identify() failed, recorded without "
+                        f"identity: {type(e).__name__}: {e}"
+                    )
+        if isinstance(declared, dict):
+            identity.update(_normalize_identity(declared))
+        if not identity:
+            return None
+        # Attributed to the plug's own file, not this service's: the run's
+        # logs show where the plug lives.
+        _emit_log_entry(
+            _log_entry("INFO", f"Identified as {_describe_identity(identity)}", self._plug_source())
+        )
+        return identity
+
+    def _plug_source(self) -> Optional[str]:
+        """The plug class's file, relative to the procedure folder when it
+        is inside it (`instruments/psu.py`); its module for an installed
+        driver."""
+        file_path = self.plug_config.get("file")
+        if not file_path:
+            return self.plug_config.get("module")
+        try:
+            return str(Path(file_path).resolve().relative_to(Path(self.procedure_dir).resolve()))
+        except ValueError:
+            return str(file_path)
+
+    def _auto_idn(self) -> Dict[str, str]:
+        """`*IDN?` on the first pyvisa resource among the instance's own
+        attributes, when it is a GPIB, USBTMC or VXI-11/HiSLIP instrument
+        (`::INSTR`): the interfaces that carry IEEE 488.2, where `*IDN?` is
+        a required, harmless query. A serial port or a raw socket can be
+        anything (a Modbus PLC, a relay board that acts on any line), so
+        nothing is sent there: those plugs report through attributes or
+        `identify()`. The resource's timeout is cut to 2s and restored."""
+        resource = next(
+            (
+                value
+                for value in vars(self.plug_instance).values()
+                if type(value).__module__.startswith("pyvisa") and hasattr(value, "query")
+            ),
+            None,
+        ) if hasattr(self.plug_instance, "__dict__") else None
+        if resource is None or not _speaks_ieee488(resource):
+            return {}
+        previous = getattr(resource, "timeout", None)
+        # pyvisa reads None as "wait forever".
+        shorten = previous is None or previous > _AUTO_IDN_TIMEOUT_MS
+        try:
+            if shorten:
+                resource.timeout = _AUTO_IDN_TIMEOUT_MS
+            return _normalize_identity(str(resource.query("*IDN?")))
+        except Exception as e:
+            # Uploaded with the run: the instrument is recorded without identity.
+            self.logs.warning(f"*IDN? got no answer: {type(e).__name__}: {e}")
+            return {}
+        finally:
+            if shorten:
+                try:
+                    resource.timeout = previous
+                except Exception:
+                    pass
 
     def _get_plug_state(self) -> Dict[str, str]:
         if not self.plug_instance:
@@ -802,6 +1019,7 @@ class PlugHandler:
             return {
                 "success": False,
                 "initializing": True,
+                "init_stage": self._init_stage,
                 "error": f"Plug initializing... ({init_duration:.1f}s elapsed)",
             }
 
@@ -819,7 +1037,10 @@ class PlugHandler:
                 state = self._get_plug_state()
             finally:
                 self._call_lock.release()
-        return {"success": True, "state": state}
+        reply: Dict[str, Any] = {"success": True, "state": state}
+        if self._identity:
+            reply["identity"] = self._identity
+        return reply
 
     def _handle_cleanup(self) -> Dict[str, Any]:
         self.cleanup_started.set()

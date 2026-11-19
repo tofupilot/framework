@@ -194,6 +194,9 @@ pub enum Placement {
     PlugConfig(usize),
     /// `plugs[i].env`.
     PlugEnv(usize),
+    /// `plugs[i].identity`: the instrument a plug declares, expanded when
+    /// the plug opens and recorded with the run.
+    PlugIdentity(usize),
     /// `with:` of a phase entry.
     PhaseWith(PhaseStage, usize),
     /// `env:` of a phase entry.
@@ -242,6 +245,7 @@ pub fn placement(path: &str, is_call: impl Fn(PhaseStage, usize) -> bool) -> Opt
                 "with" => Some(Placement::PlugWith(index)),
                 "config" => Some(Placement::PlugConfig(index)),
                 "env" if rest.len() > "env".len() => Some(Placement::PlugEnv(index)),
+                "identity" if rest.len() > "identity".len() => Some(Placement::PlugIdentity(index)),
                 _ => None,
             }
         }
@@ -434,6 +438,10 @@ mod tests {
         assert_eq!(
             placement("plugs[0].env.X", calls),
             Some(Placement::PlugEnv(0))
+        );
+        assert_eq!(
+            placement("plugs[1].identity.serial_number", calls),
+            Some(Placement::PlugIdentity(1))
         );
         assert_eq!(placement("plugs[0].name", calls), None);
         assert_eq!(

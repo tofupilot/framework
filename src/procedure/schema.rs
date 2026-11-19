@@ -2611,6 +2611,93 @@ pub struct ThenConfig {
     pub timeout: Option<PhaseNextAction>,
 }
 
+/// The instrument a plug declares in the YAML, for one that cannot
+/// report it (a fixture, a cable, a box with a sticker): each field wins
+/// over what the plug reports.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct PlugIdentityFieldsYaml {
+    /// Maker of the instrument, as the first field of its *IDN? answer:
+    /// "KEYSIGHT TECHNOLOGIES". Markers allowed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manufacturer: Option<String>,
+    /// Model, the second field of *IDN?: "E36312A". Markers allowed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Serial number, the third field of *IDN?. Differs per station:
+    /// write "{config.PSU_SERIAL}" and set the value per station.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub serial_number: Option<String>,
+    /// Firmware version, the fourth field of *IDN?. Markers allowed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub firmware: Option<String>,
+}
+
+/// `identity:` of a plug: `false`, or the fields it declares.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PlugIdentityYaml {
+    /// `identity: false`: the run records no identity for this plug, and
+    /// none is read from the instrument (no automatic *IDN?).
+    Off,
+    Declared(PlugIdentityFieldsYaml),
+}
+
+impl Serialize for PlugIdentityYaml {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            PlugIdentityYaml::Off => serializer.serialize_bool(false),
+            PlugIdentityYaml::Declared(fields) => fields.serialize(serializer),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for PlugIdentityYaml {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Visitor;
+        impl<'de> serde::de::Visitor<'de> for Visitor {
+            type Value = PlugIdentityYaml;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("false, or a map of manufacturer, model, serial_number and firmware")
+            }
+            fn visit_bool<E: serde::de::Error>(self, v: bool) -> Result<Self::Value, E> {
+                if v {
+                    Err(E::custom(
+                        "identity: true is the default (the plug reports its instrument); \
+                         write false to turn it off, or the fields to declare",
+                    ))
+                } else {
+                    Ok(PlugIdentityYaml::Off)
+                }
+            }
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                map: A,
+            ) -> Result<Self::Value, A::Error> {
+                PlugIdentityFieldsYaml::deserialize(serde::de::value::MapAccessDeserializer::new(
+                    map,
+                ))
+                .map(PlugIdentityYaml::Declared)
+            }
+        }
+        deserializer.deserialize_any(Visitor)
+    }
+}
+
+/// Schema of a plug's `identity:`, which `PlugIdentityYaml` reads as
+/// `false` or as a map.
+#[cfg(feature = "json-schema")]
+#[derive(schemars::JsonSchema)]
+#[schemars(untagged)]
+#[allow(dead_code)]
+enum PlugIdentitySchema {
+    /// false: record no identity for this plug and send no automatic
+    /// *IDN? to it.
+    Off(#[schemars(extend("const" = false))] bool),
+    /// The instrument's identity, field by field over what the plug reports.
+    Declared(PlugIdentityFieldsYaml),
+}
+
 // YAML representation (key optional for clean YAML files)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
@@ -2670,6 +2757,16 @@ pub struct PlugDefinitionYaml {
     )]
     #[cfg_attr(feature = "json-schema", schemars(with = "Option<DurationText>"))]
     pub init_timeout: Option<u64>,
+    /// The instrument this plug opens, recorded with every run that uses
+    /// it. Read from the plug by default: its identify() method, its
+    /// manufacturer / model / serial_number / firmware attributes, or an
+    /// automatic *IDN? on a pyvisa GPIB, USB or LAN instrument it holds
+    /// (never a serial port or a raw socket). Declare the fields
+    /// here for an instrument that cannot report them ({config.X} for a
+    /// per-station serial), or write false to record nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "json-schema", schemars(with = "Option<PlugIdentitySchema>"))]
+    pub identity: Option<PlugIdentityYaml>,
 }
 
 // Runtime representation (key always present)
@@ -2708,6 +2805,10 @@ pub struct PlugDefinition {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub init_timeout: Option<u64>,
 
+    /// `identity:` as written, markers in place.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity: Option<PlugIdentityYaml>,
+
     /// The file wrote `config:`, the old spelling of `with:`: diagnostics
     /// name the key the author wrote. Never serialized.
     #[serde(skip)]
@@ -2735,6 +2836,7 @@ impl From<PlugDefinitionYaml> for PlugDefinition {
             with: yaml.with.or(yaml.config),
             env: yaml.env,
             init_timeout: yaml.init_timeout,
+            identity: yaml.identity,
         }
     }
 }
@@ -2763,6 +2865,7 @@ impl PlugDefinition {
             config: self.with.clone().filter(|_| self.with_written_as_config),
             env: self.env.clone(),
             init_timeout: self.init_timeout,
+            identity: self.identity.clone(),
         }
     }
 }
@@ -2804,6 +2907,14 @@ impl PlugDefinition {
         if let Some(ms) = self.init_timeout {
             config["init_timeout_ms"] = ms.into();
         }
+        // Read by tp_plug.py after `__init__`, never handed to the class.
+        match &self.identity {
+            Some(PlugIdentityYaml::Off) => config["identity"] = false.into(),
+            Some(PlugIdentityYaml::Declared(fields)) => {
+                config["identity"] = serde_json::to_value(fields).map_err(|e| e.to_string())?
+            }
+            None => {}
+        }
         Ok(config)
     }
 
@@ -2825,6 +2936,9 @@ impl PlugDefinition {
             } else {
                 values.expand(&with, slot)
             };
+        }
+        if let Some(PlugIdentityYaml::Declared(_)) = &self.identity {
+            config["identity"] = values.expand(&config["identity"], slot);
         }
         if !self.env.is_empty() {
             let env: serde_json::Map<String, serde_json::Value> = values

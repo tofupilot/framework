@@ -1,4 +1,4 @@
-use crate::events::{PlugLogEvent, PlugStatusUpdateEvent, UiUpdateEvent};
+use crate::events::{PlugIdentifiedEvent, PlugLogEvent, PlugStatusUpdateEvent, UiUpdateEvent};
 use crate::job::{JobStatus, Outcome};
 use crate::log::LogEntry;
 use crate::measurements::Measurement;
@@ -100,6 +100,9 @@ pub enum ExecutionEvent {
         /// The failing frame's variables (`JobResult::failure_locals`).
         #[serde(default)]
         failure_locals: Vec<crate::job::FrameLocal>,
+        /// The procedure plugs the phase received (`JobResult::plug_keys`).
+        #[serde(default)]
+        plug_keys: Vec<String>,
     },
 
     /// Execution statistics snapshot
@@ -143,6 +146,11 @@ pub enum ExecutionEvent {
 
     /// Plug log output
     PlugLog(PlugLogEvent),
+
+    /// The instrument a plug instance opened, as it reported it once
+    /// ready: emitted before its `active` status, and again for a held
+    /// station plug each run that borrows it.
+    PlugIdentified(PlugIdentifiedEvent),
 
     /// UI request for operator input
     UiRequest(crate::ui::UiRequestData),
@@ -236,6 +244,8 @@ pub struct PlannedPlug {
     pub plug_key: String,
     pub plug_name: String,
     pub scope: String,
+    /// The class reference as written (`python:`), recorded with the run.
+    pub python: String,
 }
 
 /// Trait for receiving execution events.
@@ -296,6 +306,11 @@ impl MaskingSink {
         match &mut out {
             ExecutionEvent::PhaseLogLine { message, .. } => fix(message),
             ExecutionEvent::PlugLog(log) => fix(&mut log.message),
+            ExecutionEvent::PlugIdentified(e) => {
+                for field in e.identity.fields_mut() {
+                    fix(field);
+                }
+            }
             ExecutionEvent::JobProgress { error, .. } => {
                 if let Some(e) = error.as_mut() {
                     fix(e);

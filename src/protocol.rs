@@ -197,6 +197,10 @@ pub struct JobResult {
     /// JSON like `unit_json`. Set only when the phase raised.
     #[serde(default)]
     pub locals_json: Option<String>,
+    /// The procedure plugs the phase received, in parameter order. Absent
+    /// from an older worker.
+    #[serde(default)]
+    pub plug_keys: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -299,6 +303,41 @@ pub struct MethodRequest {
     pub kwargs_json: Option<String>,
 }
 
+/// What a plug reports about its instrument: the four fields of an
+/// IEEE 488.2 `*IDN?` answer. Every field is optional; a plug that set
+/// none reports no identity at all.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct PlugIdentity {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manufacturer: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub serial_number: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub firmware: Option<String>,
+}
+
+impl PlugIdentity {
+    pub fn is_empty(&self) -> bool {
+        self.manufacturer.is_none()
+            && self.model.is_none()
+            && self.serial_number.is_none()
+            && self.firmware.is_none()
+    }
+
+    pub fn fields_mut(&mut self) -> impl Iterator<Item = &mut String> {
+        [
+            &mut self.manufacturer,
+            &mut self.model,
+            &mut self.serial_number,
+            &mut self.firmware,
+        ]
+        .into_iter()
+        .flatten()
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct PlugResponse {
     pub success: bool,
@@ -308,6 +347,11 @@ pub struct PlugResponse {
     pub result_json: Option<String>,
     #[serde(default)]
     pub state: Option<HashMap<String, String>>,
+    /// `GetStatus` only, once ready: the instrument the plug opened
+    /// (tp_plug.py `_resolve_identity`). Absent when nothing identified
+    /// it, and from an older plug service.
+    #[serde(default)]
+    pub identity: Option<PlugIdentity>,
     #[serde(default)]
     pub message: Option<String>,
     #[serde(default)]
@@ -322,6 +366,11 @@ pub struct PlugResponse {
     /// failure, whatever its text says.
     #[serde(default)]
     pub initializing: bool,
+    /// `GetStatus` while initializing: what the plug is waiting on,
+    /// `"identify"` once `__init__` returned and its identity is being
+    /// read. Absent from an older plug service.
+    #[serde(default)]
+    pub init_stage: Option<String>,
     /// A failed `CallMethod`: the exception's class and message, as the
     /// plug raised them (`error` is its traceback).
     #[serde(default)]

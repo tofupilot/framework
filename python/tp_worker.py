@@ -3324,6 +3324,10 @@ def execute_job_streaming(
     restore_logging = _install_logging_bridge(logging_bridge, threshold)
 
     phase_result_container = {"error": None, "result": None}
+    # The procedure plugs the phase received, in parameter order: the run
+    # records them on the phase, which ties each measurement to the
+    # instruments that took it.
+    used_plug_keys: list = []
 
     def run_phase():
         # Phases run on this spawned thread, not the main thread, so the
@@ -3425,6 +3429,8 @@ def execute_job_streaming(
                             break
                     if matched_plug is not None:
                         kwargs[param_name] = matched_plug
+                        if plug_key not in used_plug_keys:
+                            used_plug_keys.append(plug_key)
                     elif (
                         wanted in unavailable_plugs
                         and sig.parameters[param_name].default is inspect.Parameter.empty
@@ -3630,6 +3636,7 @@ def execute_job_streaming(
                         "logs": logs.entries,
                         "run_metadata": _run_metadata_bundle(),
                         "unit_metadata": _unit_metadata_delta(),
+                        "plug_keys": list(used_plug_keys),
                     }
                 }
                 return
@@ -3651,6 +3658,7 @@ def execute_job_streaming(
         # first (the old order) sent a bare Error message and silently
         # dropped all of that.
         if phase_result_container["result"]:
+            phase_result_container["result"]["plug_keys"] = list(used_plug_keys)
             yield {"type": "result", "data": phase_result_container["result"]}
         elif phase_result_container["error"]:
             raise Exception(phase_result_container["error"])
@@ -3665,6 +3673,7 @@ def execute_job_streaming(
                     "logs": logs.entries,
                     "run_metadata": _run_metadata_bundle(),
                     "unit_metadata": _unit_metadata_delta(),
+                    "plug_keys": list(used_plug_keys),
                 }
             }
 
@@ -3930,6 +3939,9 @@ def handle_connection(conn: socket.socket, procedure_dir: Path):
 
                 if final_result.get("locals"):
                     job_result["locals_json"] = _dumps(final_result["locals"])
+
+                if final_result.get("plug_keys"):
+                    job_result["plug_keys"] = final_result["plug_keys"]
 
                 answered = engine.answered_wait_id()
                 if answered is not None:

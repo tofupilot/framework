@@ -170,7 +170,7 @@ pub(crate) fn text_diagnostics(text: &str, _kind: FileKind) -> TextDiagnostics {
                     *column,
                     super::codes::MARKER_AS_TEXT,
                     format!(
-                        "{path}: `{written}` is kept as text: markers resolve only in `with:`, `env:` and a unit field's `default_value`"
+                        "{path}: `{written}` is kept as text: markers resolve only in `with:`, `env:`, a plug's `identity:` and a unit field's `default_value`"
                     ),
                 )),
                 Some(Placement::CallWith(..)) => out.errors.push(TextError {
@@ -866,7 +866,7 @@ plugs:
         let details: Vec<&str> = outcome.warnings.iter().map(|w| w.detail.as_str()).collect();
         assert_eq!(
             details,
-            ["main[0].description: `{run.station.name}` is kept as text: markers resolve only in `with:`, `env:` and a unit field's `default_value`"],
+            ["main[0].description: `{run.station.name}` is kept as text: markers resolve only in `with:`, `env:`, a plug's `identity:` and a unit field's `default_value`"],
         );
         let def = outcome.definition.unwrap();
         assert_eq!(

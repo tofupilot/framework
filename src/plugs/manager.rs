@@ -5,7 +5,9 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use crate::event_sink::{EventSink, ExecutionEvent};
-use crate::events::{PlugScope, PlugStage, PlugStatusUpdateEvent, PlugStatusValue};
+use crate::events::{
+    PlugIdentifiedEvent, PlugScope, PlugStage, PlugStatusUpdateEvent, PlugStatusValue,
+};
 use crate::plugs::plug_service::PlugServiceManager;
 
 pub(crate) fn emit_plug_status(
@@ -28,6 +30,29 @@ pub(crate) fn emit_plug_status(
 
     log::debug!("PLUG [BACKEND] Emitting plug-status-update: {:?}", event);
     event_sink.emit(&ExecutionEvent::PlugStatus(event));
+}
+
+/// Announce what a plug instance reported about its instrument, if
+/// anything: just before its `active` status, so a consumer that records
+/// the run's plugs has the identity when the plug becomes usable.
+pub(crate) fn emit_plug_identified(
+    event_sink: &Arc<dyn EventSink>,
+    identity: Option<crate::protocol::PlugIdentity>,
+    plug_key: &str,
+    plug_name: &str,
+    scope: PlugScope,
+    slot_id: Option<String>,
+) {
+    let Some(identity) = identity.filter(|i| !i.is_empty()) else {
+        return;
+    };
+    event_sink.emit(&ExecutionEvent::PlugIdentified(PlugIdentifiedEvent {
+        plug_key: plug_key.to_string(),
+        plug_name: plug_name.to_string(),
+        scope,
+        slot_id,
+        identity,
+    }));
 }
 
 /// A live plug service, as addressed by the instance map. Its map key is
@@ -474,6 +499,14 @@ impl ResourceManager {
                         },
                     );
                     log::info!("Created plug {} on port {}", p.instance_key, port);
+                    emit_plug_identified(
+                        event_sink,
+                        self.plug_service_manager.identity(&p.instance_key),
+                        &p.plug_name,
+                        &p.display_name,
+                        wanted_scope,
+                        p.slot_id.clone(),
+                    );
                     emit_plug_status(
                         event_sink,
                         p.plug_name,
@@ -533,6 +566,14 @@ impl ResourceManager {
         for o in abandoned {
             let status = match o.opened {
                 Some(port) => {
+                    emit_plug_identified(
+                        event_sink,
+                        self.plug_service_manager.identity(&o.instance_key),
+                        &o.plug_name,
+                        &o.display_name,
+                        o.scope,
+                        o.slot_id.clone(),
+                    );
                     not_opened.remove(&o.instance_key);
                     instances.insert(
                         o.instance_key,

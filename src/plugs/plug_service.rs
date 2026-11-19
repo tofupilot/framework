@@ -13,7 +13,7 @@ use crate::event_sink::{EventSink, ExecutionEvent};
 use crate::events::PlugLogEvent;
 use crate::log::LogEntry;
 use crate::plugs::process::ChildProcess;
-use crate::protocol::{MethodRequest, PlugRequest, PlugResponse};
+use crate::protocol::{MethodRequest, PlugIdentity, PlugRequest, PlugResponse};
 use crate::transport;
 use serde_json;
 
@@ -24,6 +24,13 @@ pub type PlugService = ChildProcess;
 /// runs — a dead or wedged process must be respawned, not handed to a
 /// new run.
 pub async fn probe_plug_health(port: u16) -> Result<(), String> {
+    probe_plug_identity(port).await.map(|_| ())
+}
+
+/// `probe_plug_health`, keeping what the plug reported about its
+/// instrument: a held station plug identified itself once, at its first
+/// run, and every later run that borrows it records the same identity.
+pub async fn probe_plug_identity(port: u16) -> Result<Option<PlugIdentity>, String> {
     let response = tokio::time::timeout(
         std::time::Duration::from_secs(5),
         plug_rpc(port, &PlugRequest::GetStatus),
@@ -32,7 +39,7 @@ pub async fn probe_plug_health(port: u16) -> Result<(), String> {
     .map_err(|_| "GetStatus timed out after 5s".to_string())??;
 
     if response.success {
-        Ok(())
+        Ok(response.identity.filter(|i| !i.is_empty()))
     } else {
         Err(response
             .error
@@ -111,9 +118,11 @@ async fn poll_plug_ready(
     plug_name: &str,
     timeout: std::time::Duration,
     mut exited: impl FnMut() -> Option<String>,
-) -> Result<(), String> {
+) -> Result<Option<PlugIdentity>, String> {
     let deadline = tokio::time::Instant::now() + timeout;
     let poll_interval = std::time::Duration::from_millis(100);
+    // Where the last probe found the plug: names the step that ran out.
+    let mut stage: Option<String> = None;
 
     loop {
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
@@ -125,8 +134,9 @@ async fn poll_plug_ready(
         {
             Ok(Ok(response)) => {
                 if response.success {
-                    return Ok(());
+                    return Ok(response.identity.filter(|i| !i.is_empty()));
                 }
+                stage = response.init_stage.clone();
                 if !response.initializing {
                     return Err(response
                         .error
@@ -144,10 +154,16 @@ async fn poll_plug_ready(
         }
 
         if tokio::time::Instant::now() >= deadline {
-            return Err(format!(
-                "Plug {plug_name}: __init__ did not finish within {}; raise the plug's `init_timeout:` for a slower instrument",
-                crate::procedure::schema::format_duration(timeout.as_millis() as u64)
-            ));
+            let within = crate::procedure::schema::format_duration(timeout.as_millis() as u64);
+            return Err(if stage.as_deref() == Some("identify") {
+                format!(
+                    "Plug {plug_name}: __init__ returned, but reading its identity (identify() or an identity property) did not finish within {within}; give the instrument's read a timeout, or set identify = None"
+                )
+            } else {
+                format!(
+                    "Plug {plug_name}: __init__ did not finish within {within}; raise the plug's `init_timeout:` for a slower instrument"
+                )
+            });
         }
 
         tokio::time::sleep(poll_interval).await;
@@ -158,6 +174,10 @@ async fn poll_plug_ready(
 #[derive(Debug)]
 pub struct PlugServiceManager {
     services: Mutex<HashMap<String, PlugService>>,
+    /// What each running service reported about its instrument when it
+    /// came up, by instance key. Read by whoever announces the plug
+    /// active, which knows its scope.
+    identities: std::sync::Mutex<HashMap<String, PlugIdentity>>,
     project_dir: PathBuf,
     /// Pre-resolved Python interpreter. When set, plug services skip
     /// the engine's `resolve_python` walk-up and use this path
@@ -188,11 +208,21 @@ impl PlugServiceManager {
         log::debug!("Creating new PlugServiceManager with ID: {}", id);
         Self {
             services: Mutex::new(HashMap::new()),
+            identities: std::sync::Mutex::new(HashMap::new()),
             project_dir,
             python_path,
             id,
             procedure_env: std::sync::RwLock::new(Vec::new()),
         }
+    }
+
+    /// What the running service `instance_key` reported about its
+    /// instrument when it came up; `None` when nothing identified it.
+    pub fn identity(&self, instance_key: &str) -> Option<PlugIdentity> {
+        self.identities
+            .lock()
+            .ok()
+            .and_then(|identities| identities.get(instance_key).cloned())
     }
 
     /// The env (credentials, then the procedure's `env:`) for plug
@@ -227,7 +257,7 @@ impl PlugServiceManager {
         service: &mut ChildProcess,
         plug_name: &str,
         timeout: std::time::Duration,
-    ) -> Result<(), String> {
+    ) -> Result<Option<PlugIdentity>, String> {
         let port = service.port;
         poll_plug_ready(port, plug_name, timeout, || {
             match service.process.try_wait() {
@@ -397,10 +427,20 @@ impl PlugServiceManager {
 
         let port = service.port;
 
-        if let Err(e) = Self::wait_for_plug_ready(&mut service, &plug_key, ready_timeout).await {
-            log::debug!("Plug '{}' initialization failed: {}", instance_key, e);
-            service.force_kill().await.ok();
-            return Err(e);
+        let identity = match Self::wait_for_plug_ready(&mut service, &plug_key, ready_timeout).await
+        {
+            Ok(identity) => identity,
+            Err(e) => {
+                log::debug!("Plug '{}' initialization failed: {}", instance_key, e);
+                service.force_kill().await.ok();
+                return Err(e);
+            }
+        };
+        if let Ok(mut identities) = self.identities.lock() {
+            match identity {
+                Some(identity) => identities.insert(instance_key.clone(), identity),
+                None => identities.remove(&instance_key),
+            };
         }
 
         let mut services = self.services.lock().await;

@@ -47,7 +47,7 @@ use tokio::sync::Mutex;
 
 use crate::event_sink::EventSink;
 use crate::events::{PlugScope, PlugStage, PlugStatusValue};
-use crate::plugs::plug_service::{probe_plug_health, PlugServiceManager};
+use crate::plugs::plug_service::{probe_plug_identity, PlugServiceManager};
 
 /// Spawn identity of a station plug instance. Two definitions with equal
 /// fingerprints (within one procedure context) may share a live process;
@@ -84,6 +84,24 @@ struct StationPlugEntry {
     port: u16,
     fingerprint: PlugFingerprint,
     display_name: String,
+}
+
+/// What the run that borrows a held plug records about its instrument:
+/// the identity the live process reports, read again on each reuse.
+fn announce_identity(
+    event_sink: &Arc<dyn EventSink>,
+    identity: Option<crate::protocol::PlugIdentity>,
+    plug_key: &str,
+    display_name: &str,
+) {
+    crate::plugs::manager::emit_plug_identified(
+        event_sink,
+        identity,
+        plug_key,
+        display_name,
+        PlugScope::Station,
+        None,
+    );
 }
 
 /// The procedure context a set of held plugs belongs to. Any change
@@ -249,9 +267,10 @@ impl StationPlugHost {
 
         if let Some(entry) = inner.live.get(plug_key) {
             if entry.fingerprint == fingerprint {
-                match probe_plug_health(entry.port).await {
-                    Ok(()) => {
+                match probe_plug_identity(entry.port).await {
+                    Ok(identity) => {
                         log::info!("Reusing station plug '{}' on port {}", plug_key, entry.port);
+                        announce_identity(event_sink, identity, plug_key, display_name);
                         return Ok(entry.port);
                     }
                     Err(e) => {
@@ -372,6 +391,13 @@ impl StationPlugHost {
         );
 
         log::info!("Created station plug '{}' on port {}", plug_key, port);
+
+        announce_identity(
+            event_sink,
+            manager.identity(plug_key),
+            plug_key,
+            display_name,
+        );
 
         crate::plugs::manager::emit_plug_status(
             event_sink,

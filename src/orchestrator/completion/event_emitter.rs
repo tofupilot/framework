@@ -92,5 +92,6 @@ pub fn emit_job_complete_event(
         unit_metadata: job_result.unit_metadata.clone(),
         sequence_path: job.sequence_path.clone(),
         failure_locals: job_result.failure_locals.clone(),
+        plug_keys: job_result.plug_keys.clone(),
     });
 }

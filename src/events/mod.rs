@@ -77,6 +77,15 @@ pub struct PlugLogEvent {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct PlugIdentifiedEvent {
+    pub plug_key: String,
+    pub plug_name: String,
+    pub scope: PlugScope,
+    pub slot_id: Option<String>,
+    pub identity: crate::protocol::PlugIdentity,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct UiUpdateEvent {
     pub job_id: String,
     pub slot_id: String,

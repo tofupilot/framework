@@ -844,6 +844,7 @@ impl OrchestratorState {
             run_metadata: Default::default(),
             unit_metadata: Default::default(),
             failure_locals: Vec::new(),
+            plug_keys: Vec::new(),
             prompt_closed: false,
         }
     }

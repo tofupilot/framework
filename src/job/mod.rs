@@ -324,6 +324,10 @@ pub struct JobResult {
     /// agents reading the failure locally: never part of the uploaded run.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub failure_locals: Vec<FrameLocal>,
+    /// The procedure plugs the phase received (worker `plug_keys`): what
+    /// ties its measurements to the instruments that took them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub plug_keys: Vec<String>,
     /// A stop closed the phase's operator prompt or `ui.wait()` under it,
     /// unanswered: its error then is the cut's, not its own (completion
     /// handler), and its STOP is no stop request. A prompt nobody could
@@ -409,6 +413,7 @@ impl JobResult {
             run_metadata: Default::default(),
             unit_metadata: Default::default(),
             failure_locals: Vec::new(),
+            plug_keys: Vec::new(),
             prompt_closed: false,
         }
     }
@@ -449,6 +454,7 @@ impl JobResult {
             run_metadata: Default::default(),
             unit_metadata: Default::default(),
             failure_locals: Vec::new(),
+            plug_keys: Vec::new(),
             prompt_closed: false,
         }
     }
@@ -482,6 +488,7 @@ impl JobResult {
             run_metadata: Default::default(),
             unit_metadata: Default::default(),
             failure_locals: Vec::new(),
+            plug_keys: Vec::new(),
             prompt_closed: false,
         }
     }
@@ -508,6 +515,7 @@ impl JobResult {
             run_metadata: Default::default(),
             unit_metadata: Default::default(),
             failure_locals: Vec::new(),
+            plug_keys: Vec::new(),
             prompt_closed: false,
         }
     }

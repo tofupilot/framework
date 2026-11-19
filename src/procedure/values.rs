@@ -926,6 +926,9 @@ plugs:
       nest: \"{run.slot.name}\"
     env:
       DEBUG: \"{config.DEBUG}\"
+    identity:
+      model: Mes box
+      serial_number: \"MES-{config.TIMEOUT}-{run.slot.key}\"
 main:
   - name: M
     python: phases.m:m
@@ -1068,6 +1071,12 @@ main:
         );
         // DEBUG has no value: empty in the environment.
         assert_eq!(config["env"], serde_json::json!({"DEBUG": ""}));
+        // The declared identity goes to the plug service with its markers
+        // expanded, never into the class's keyword arguments.
+        assert_eq!(
+            config["identity"],
+            serde_json::json!({"model": "Mes box", "serial_number": "MES-30-s1"})
+        );
         let unit = values.expand_unit_config(def.unit.as_ref().unwrap(), Some(&slot));
         assert_eq!(
             unit.serial_number.unwrap().default_value.as_deref(),

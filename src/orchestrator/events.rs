@@ -162,6 +162,7 @@ impl Orchestrator {
             .map(|p| PlannedPlug {
                 plug_key: p.key.clone(),
                 plug_name: p.name.clone(),
+                python: p.python.as_str().to_string(),
                 scope: if p.scope == crate::procedure::schema::Scope::Station && station_effective {
                     "station".to_string()
                 } else {
@@ -175,6 +176,7 @@ impl Orchestrator {
             .map(|p| PlannedPlug {
                 plug_key: p.key.clone(),
                 plug_name: p.name.clone(),
+                python: p.python.as_str().to_string(),
                 scope: "slot".to_string(),
             })
             .collect();

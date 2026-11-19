@@ -1795,6 +1795,7 @@ impl Worker {
             run_metadata: Default::default(),
             unit_metadata: Default::default(),
             failure_locals: Vec::new(),
+            plug_keys: Vec::new(),
             prompt_closed: false,
         })
     }
@@ -1937,6 +1938,7 @@ impl Worker {
             run_metadata: Default::default(),
             unit_metadata: Default::default(),
             failure_locals: Vec::new(),
+            plug_keys: Vec::new(),
             prompt_closed,
         };
         finalize_and_announce(
@@ -2270,6 +2272,7 @@ fn convert_job_result(
             .locals_json
             .and_then(|json| serde_json::from_str(&json).ok())
             .unwrap_or_default(),
+        plug_keys: result.plug_keys,
         prompt_closed: false,
     })
 }
