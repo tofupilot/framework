@@ -2412,7 +2412,9 @@ pub struct ExecutionConfig {
     #[serde(default = "default_strategy")]
     pub strategy: ExecutionStrategy,
 
-    /// Parallel workers, 1-256. Default 8.
+    /// Parallel workers, 1-256. Default 8. 1 runs the phases one at a time
+    /// in written order, a retried phase's attempts included; above 1,
+    /// phases without depends_on do not wait for each other.
     #[serde(default = "default_workers")]
     #[validate(range(min = 1, max = 256))]
     pub workers: usize,
@@ -3330,7 +3332,10 @@ pub struct PhaseDefinitionYaml {
     /// Retry budget for this phase (limit, delay). A retry happens when then:
     /// names retry for an outcome, or when the phase code calls
     /// phase.retry(); this sets the budget for both. Absent, the budget is
-    /// 3 retries.
+    /// 3 retries. With execution.workers: 1, every attempt, delay included,
+    /// ends before the phase written after this one starts; with more
+    /// workers, a phase waits for the last attempt only if it depends_on
+    /// this one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retry: Option<RetryConfigYaml>,
     /// What happens after this phase, per outcome (pass, fail, error, timeout):

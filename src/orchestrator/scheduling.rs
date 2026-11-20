@@ -580,6 +580,9 @@ impl Orchestrator {
 
     async fn get_next_ready_job(&self) -> Option<Job> {
         let mut state = self.state.write().await;
+        if state.retry_holds_the_queue() {
+            return None;
+        }
 
         let mut checked_jobs = Vec::new();
         let mut ready_job = None;

@@ -609,8 +609,23 @@ impl OrchestratorState {
             .retain(|pending| !pending.handle.is_finished());
     }
 
+    /// A delayed retry sleeps outside the queue, so with one worker the
+    /// queue is held until it is back: it keeps the place an undelayed
+    /// retry takes at the front, and the phases written after it wait.
+    /// With more workers, phases no `depends_on` orders stay independent.
+    pub fn retry_holds_the_queue(&self) -> bool {
+        self.worker_state.num_workers() <= 1
+            && self
+                .pending_delayed_retry_handles
+                .iter()
+                .any(|p| !p.handle.is_finished())
+    }
+
     /// Get the next ready job from the queue
     pub fn pop_ready_job(&mut self, check_deps: impl Fn(&Job) -> bool) -> Option<Job> {
+        if self.retry_holds_the_queue() {
+            return None;
+        }
         let mut checked_jobs = Vec::new();
         let mut ready_job = None;
 
